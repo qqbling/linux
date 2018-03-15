@@ -495,6 +495,16 @@ config VIDEO_QCOM_VENUS
 	  on various Qualcomm SoCs.
 	  To compile this driver as a module choose m here.
 
+config VIDEO_AML_MESON_VDEC
+	tristate "AMLogic video decoder driver"
+	depends on VIDEO_DEV && VIDEO_V4L2 && HAS_DMA
+	depends on (ARCH_MESON) || COMPILE_TEST
+	select VIDEOBUF2_DMA_CONTIG
+	select V4L2_MEM2MEM_DEV
+	---help---
+	Support for the video encoder/decoder found in Meson8b chips.
+	Only allows H.264 -> NV21 decoding at the moment.
+
 endif # V4L_MEM2MEM_DRIVERS
 
 # TI VIDEO PORT Helper Modules

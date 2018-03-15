@@ -102,6 +102,15 @@
 			reg = <0x0 0x200000>;
 			no-map;
 		};
+
+		/* 128 MiB for DMA requests (mostly VDEC) */
+		linux,cma {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0x8000000>;
+			alignment = <0x400000>;
+			linux,cma-default;
+		};
 	};
 
 	scu@c4300000 {
@@ -348,6 +357,24 @@
 	clocks = <&clkc CLKID_USB>, <&clkc CLKID_USB1>;
 	clock-names = "usb_general", "usb";
 	resets = <&reset RESET_USB_OTG>;
+};
+
+&vdec {
+	power-domains = <&pwrc_vdec>;
+};
+
+&pwrc_vdec {
+	clocks = <&clkc CLKID_VPU_INTR>, <&clkc CLKID_DOS_PARSER>, <&clkc CLKID_VDEC_1>;
+	clock-names = "vpu_intr", "dos_parser", "vdec_1";
+
+	assigned-clocks = <&clkc CLKID_VDEC_1_SEL>,
+					  <&clkc CLKID_VDEC_1>;
+
+	assigned-clock-parents = <&clkc CLKID_FCLK_DIV7>,
+							 <0>;
+
+	assigned-clock-rates = <0>,
+						   <200000000>;
 };
 
 &wdt {

@@ -21,12 +21,14 @@
 
 #define REG_BUF_SIZE 21
 
-struct vdec_buffer {
+struct dummy_buf {
 	struct vb2_v4l2_buffer vb;
+	struct list_head list;
 };
 
-struct reg_buffer {
-	u32 flags;
+struct vdec_buffer {
+	struct list_head list;
+	s32 index;
 	u64 timestamp;
 };
 
@@ -35,7 +37,7 @@ struct vdec_core {
 	void __iomem *esparser_base;
 	void __iomem *dmc_base;
 	struct regmap *regmap_ao;
-    int irq;
+	int irq;
 	struct device *dev;
 	struct device *dev_dec;
 
@@ -44,35 +46,48 @@ struct vdec_core {
 	struct v4l2_fh fh;
 	struct v4l2_m2m_dev *m2m_dev;
 	struct v4l2_m2m_ctx *m2m_ctx;
-	
+
 	struct mutex lock;
-	
-	struct reg_buffer reg_buffers[REG_BUF_SIZE];
-	int reg_buf_start;
-	int reg_buf_end;
-	
+
 	/* Big contiguous area for the Decoded Picture Buffer */
-	void *vbuf_vaddr;
-	dma_addr_t vbuf_paddr;
-	
+	void *dpb_vaddr;
+	dma_addr_t dpb_paddr;
+	u32 dpb_size;
+
+	/* Big contiguous area for the VIFIFO */
+	void *vififo_vaddr;
+	dma_addr_t vififo_paddr;
+	u32 vififo_size;
+
 	/* Fake Start Code for the ESPARSER to trigger the IRQs */
 	unsigned char *fake_pattern;
 	dma_addr_t     fake_pattern_map;
-	
+
 	/* H.264 decoder requires an extended firmware loaded in contiguous RAM */
 	void      *vh264_ext_fw_vaddr;
 	dma_addr_t vh264_ext_fw_paddr;
-	
+
 	/* The decoder requires a "post canvas", don't really know what it's for */
 	void      *dummy_post_canvas_vaddr;
 	dma_addr_t dummy_post_canvas_paddr;
-	
+
+	/* Whether capture/output streaming are on */
 	unsigned int streamon_cap, streamon_out;
 	
+	/* Capture sequence counter */
+	unsigned int sequence_cap;
+
 	u32 colorspace;
 	u8 ycbcr_enc;
 	u8 quantization;
 	u8 xfer_func;
+
+	/* Buffers queued into the HW */
+	struct list_head bufs;
+	spinlock_t bufs_spinlock;
+	struct work_struct mark_buffers_done_work;
+
+	struct semaphore queue_sema;
 };
 
 #endif

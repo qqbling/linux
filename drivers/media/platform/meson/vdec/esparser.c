@@ -83,7 +83,7 @@ static irqreturn_t esparser_isr(int irq, void *dev) {
 	int_status = readl_relaxed(core->esparser_base + PARSER_INT_STATUS);
 	writel_relaxed(int_status, core->esparser_base + PARSER_INT_STATUS);
 
-	printk("esparser_isr! status = %08X\n", int_status);
+	//printk("esparser_isr! status = %08X\n", int_status);
 
 	if (int_status & PARSER_INTSTAT_SC_FOUND) {
 		writel_relaxed(0, core->esparser_base + PFIFO_RD_PTR);
@@ -97,18 +97,43 @@ static irqreturn_t esparser_isr(int irq, void *dev) {
 
 static int first_pkt = 1;
 
+/**
+ * Userspace is very likely to feed us packets with timestamps not in chronological order
+ * because of B-frames. Rearrange them here.
+ */
+static void add_buffer_to_list(struct vdec_core *core, struct vdec_buffer *new_buf) {
+	struct vdec_buffer *tmp;
+
+	spin_lock(&core->bufs_spinlock);
+	if (list_empty(&core->bufs))
+		goto add_core;
+
+	list_for_each_entry(tmp, &core->bufs, list) {
+		if (new_buf->timestamp < tmp->timestamp) {
+			list_add_tail(&new_buf->list, &tmp->list);
+			goto unlock;
+		}
+	}
+
+add_core:
+	list_add_tail(&new_buf->list, &core->bufs);
+unlock:
+	spin_unlock(&core->bufs_spinlock);
+}
+
 int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 	struct vb2_buffer *vb = &vbuf->vb2_buf;
-	struct reg_buffer *reg_buf;
-	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(&vbuf->vb2_buf, 0);
+	struct vdec_buffer *new_buf;
 	int ret;
+	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(&vbuf->vb2_buf, 0);
 
-	printk("Putting buffer with address %08X; len %d\n", phy, vb2_get_plane_payload(vb, 0));
+	//printk("Putting buffer with address %08X; len %d\n", phy, vb2_get_plane_payload(vb, 0));
+	down(&core->queue_sema);
 	wmb();
 	writel_relaxed(0, core->esparser_base + PFIFO_RD_PTR);
 	writel_relaxed(0, core->esparser_base + PFIFO_WR_PTR);
 	writel_relaxed(ES_WRITE | ES_PARSER_START | ES_SEARCH | ((vb2_get_plane_payload(vb, 0) << ES_PACK_SIZE_BIT)), core->esparser_base + PARSER_CONTROL);
-	
+
 	writel_relaxed(phy, core->esparser_base + PARSER_FETCH_ADDR);
 	writel_relaxed((7 << FETCH_ENDIAN_BIT) | vb2_get_plane_payload(vb, 0), core->esparser_base + PARSER_FETCH_CMD);
 	search_done = 0;
@@ -119,14 +144,13 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 
 	v4l2_m2m_src_buf_remove_by_buf(core->m2m_ctx, vbuf);
 	if (ret > 0) {
-		msleep(30); // Don't go too fast.. Very hacky for now
-		reg_buf = &core->reg_buffers[core->reg_buf_end++];
-		if (core->reg_buf_end == REG_BUF_SIZE)
-			core->reg_buf_end = 0;
+		//msleep(30); // Don't go too fast.. Very hacky for now
+		schedule_work(&core->mark_buffers_done_work);
+		new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
+		new_buf->timestamp = vb->timestamp;
+		new_buf->index = -1;
 
-		reg_buf->flags = vbuf->flags;
-		reg_buf->timestamp = vb->timestamp;
-
+		add_buffer_to_list(core, new_buf);
 		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 	} else if (ret <= 0) {
 		printk("Write timeout\n");
@@ -159,8 +183,8 @@ int esparser_power_up(struct vdec_core *core) {
 	writel_relaxed((ES_SEARCH | ES_PARSER_START), core->esparser_base + PARSER_CONTROL);
 
 	/* parser video */
-	writel_relaxed(core->vbuf_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
-	writel_relaxed(core->vbuf_paddr + 0x2000000, core->esparser_base + PARSER_VIDEO_END_PTR);
+	writel_relaxed(core->vififo_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
+	writel_relaxed(core->vififo_paddr + core->vififo_size, core->esparser_base + PARSER_VIDEO_END_PTR);
 	writel_relaxed(1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(0, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec
@@ -177,21 +201,20 @@ int stbuf_power_up(struct vdec_core *core) {
 	writel_relaxed(0, core->dos_base + VLD_MEM_VIFIFO_WRAP_COUNT);
 	writel_relaxed(1 << 4, core->dos_base + POWER_CTL_VLD);
 
-	writel_relaxed(core->vbuf_paddr, core->dos_base + VLD_MEM_VIFIFO_START_PTR);
-	writel_relaxed(core->vbuf_paddr, core->dos_base + VLD_MEM_VIFIFO_CURR_PTR);
-	writel_relaxed(core->vbuf_paddr + 0x2000000 - 8, core->dos_base + VLD_MEM_VIFIFO_END_PTR);
+	writel_relaxed(core->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_START_PTR);
+	writel_relaxed(core->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_CURR_PTR);
+	writel_relaxed(core->vififo_paddr + core->vififo_size - 8, core->dos_base + VLD_MEM_VIFIFO_END_PTR);
 
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) |  1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) & ~1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 
 	writel_relaxed(MEM_BUFCTRL_MANUAL, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-	writel_relaxed(core->vbuf_paddr,   core->dos_base + VLD_MEM_VIFIFO_WP);
+	writel_relaxed(core->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_WP);
 
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) |  1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) | (0x11 << 16) | MEM_FILL_ON_LEVEL | MEM_CTRL_FILL_EN | MEM_CTRL_EMPTY_EN,
-				core->dos_base + VLD_MEM_VIFIFO_CONTROL);
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) | (0x11 << 16) | MEM_FILL_ON_LEVEL | MEM_CTRL_FILL_EN | MEM_CTRL_EMPTY_EN, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 
 	return 0;
 }
@@ -224,7 +247,7 @@ int esparser_init(struct platform_device *pdev, struct vdec_core *core) {
 	core->fake_pattern[2] = 0x01;
 	core->fake_pattern[3] = 0xff;
 	core->fake_pattern_map = dma_map_single(NULL, core->fake_pattern,
-									SEARCH_PATTERN_LEN, DMA_TO_DEVICE);
+						SEARCH_PATTERN_LEN, DMA_TO_DEVICE);
 
 	return 0;
 }

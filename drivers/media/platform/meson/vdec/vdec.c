@@ -341,7 +341,7 @@ static int vdec_try_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	memset(pixmp->reserved, 0, sizeof(pixmp->reserved));
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-		pixmp->pixelformat = V4L2_PIX_FMT_NV12;
+		pixmp->pixelformat = V4L2_PIX_FMT_NV21M;
 	else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		pixmp->pixelformat = V4L2_PIX_FMT_H264;
 	else
@@ -378,7 +378,7 @@ static int vdec_g_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	memset(pixmp->reserved, 0, sizeof(pixmp->reserved));
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-		pixmp->pixelformat = V4L2_PIX_FMT_NV12;
+		pixmp->pixelformat = V4L2_PIX_FMT_NV21M;
 	else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		pixmp->pixelformat = V4L2_PIX_FMT_H264;
 	else
@@ -433,7 +433,7 @@ static int vdec_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		f->pixelformat = V4L2_PIX_FMT_H264;
 	else if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-		f->pixelformat = V4L2_PIX_FMT_NV12;
+		f->pixelformat = V4L2_PIX_FMT_NV21M;
 	else
 		return -EINVAL;
 

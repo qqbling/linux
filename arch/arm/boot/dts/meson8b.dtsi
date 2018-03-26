@@ -103,11 +103,11 @@
 			no-map;
 		};
 
-		/* 128 MiB for DMA requests (mostly VDEC) */
+		/* 256 MiB for DMA requests (mostly VDEC) */
 		linux,cma {
 			compatible = "shared-dma-pool";
 			reusable;
-			size = <0x8000000>;
+			size = <0x10000000>;
 			alignment = <0x400000>;
 			linux,cma-default;
 		};

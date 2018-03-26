@@ -24,14 +24,20 @@
 
 /* DOS registers */
 #define ASSIST_MBOX1_CLR_REG 0x01d4
-#define ASSIST_MBOX1_MASK	0x01d8
+#define ASSIST_MBOX1_MASK    0x01d8
 
-#define MPSR		  0x0c04
-#define CPSR		  0x0c84
+#define MPSR 0x0c04
+#define CPSR 0x0c84
 
-#define PSCALE_CTRL   0x2444
+#define MC_STATUS0  0x2424
+#define MC_CTRL1    0x242c
+#define PSCALE_CTRL 0x2444
+
+#define DBLK_CTRL   0x2544
+#define DBLK_STATUS 0x254c
 
 #define MDEC_PIC_DC_CTRL   0x2638
+#define MDEC_PIC_DC_STATUS 0x263c
 #define ANC0_CANVAS_ADDR   0x2640
 #define MDEC_PIC_DC_THRESH 0x26e0
 
@@ -100,7 +106,7 @@ static int vdec_load_firmware(struct vdec_core *core, const char* fwname)
 	writel_relaxed(1, core->dos_base + MPSR);
 	writel_relaxed(1, core->dos_base + CPSR);
 
-	writel_relaxed(readl_relaxed(core->dos_base + 0x2638) & ~(1<<31), core->dos_base + 0x2638); // MDEC_PIC_DC_CTRL
+	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) & ~(1<<31), core->dos_base + MDEC_PIC_DC_CTRL);
 	writel_relaxed(mc_addr_map, core->dos_base + 0xd04); // IMEM_DMA_ADR
 	writel_relaxed(MC_SIZE, core->dos_base + 0xd08); // IMEM_DMA_COUNT
 	writel_relaxed((0x8000 | (7 << 16)), core->dos_base + 0xd00); // IMEM_DMA_CTRL ; Magic value from AML code
@@ -160,8 +166,18 @@ static void vh264_power_up(struct vdec_core *core) {
 	writel_relaxed(0x404038aa, core->dos_base + MDEC_PIC_DC_THRESH);
 }
 
+static u32 get_output_size(u32 width, u32 height) {
+	return (width * height * 3) / 2;
+}
+
+static u32 vdec_get_output_size(struct vdec_core *core) {
+	return get_output_size(core->width, core->height);
+}
+
 static int vdec_poweron(struct vdec_core *core) {
 	int ret;
+
+	printk("vdec_poweron\n");
 
 	/* Reset VDEC1 */
 	writel(0xfffffffc, core->dos_base + DOS_SW_RESET0);
@@ -204,6 +220,42 @@ static int vdec_poweron(struct vdec_core *core) {
 	return 0;
 }
 
+static void vdec_poweroff(struct vdec_core *core) {
+	printk("vdec_poweroff\n");
+
+	writel_relaxed(0, core->dos_base + MPSR);
+	writel_relaxed(0, core->dos_base + CPSR);
+
+	writel_relaxed((1<<12)|(1<<11), core->dos_base + DOS_SW_RESET0);
+	writel_relaxed(0, core->dos_base + DOS_SW_RESET0);
+	readl_relaxed(core->dos_base + DOS_SW_RESET0);
+	readl_relaxed(core->dos_base + DOS_SW_RESET0);
+
+	writel_relaxed(0, core->dos_base + ASSIST_MBOX1_MASK);
+
+	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) | 1, core->dos_base + MDEC_PIC_DC_CTRL);
+	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) & ~1, core->dos_base + MDEC_PIC_DC_CTRL);
+	readl_relaxed(core->dos_base + MDEC_PIC_DC_STATUS);
+	readl_relaxed(core->dos_base + MDEC_PIC_DC_STATUS);
+
+	writel_relaxed(3, core->dos_base + DBLK_CTRL);
+	writel_relaxed(0, core->dos_base + DBLK_CTRL);
+	readl_relaxed(core->dos_base + DBLK_STATUS);
+	readl_relaxed(core->dos_base + DBLK_STATUS);
+
+	writel_relaxed(readl_relaxed(core->dos_base + MC_CTRL1) | 0x9, core->dos_base + MC_CTRL1);
+	writel_relaxed(readl_relaxed(core->dos_base + MC_CTRL1) & ~0x9, core->dos_base + MC_CTRL1);
+	readl_relaxed(core->dos_base + MC_STATUS0);
+	readl_relaxed(core->dos_base + MC_STATUS0);
+
+	/* enable vdec1 isolation */
+	regmap_write(core->regmap_ao, 0xec, 0xc0);
+	/* power off vdec1 memories */
+	writel(0xffffffffUL, core->dos_base + 0xfcc0);
+
+	printk("vdec_poweroff end\n");
+}
+
 void vdec_m2m_device_run(void *priv) {
 	struct vdec_core *core = priv;
 	struct v4l2_m2m_buffer *buf, *n;
@@ -234,16 +286,17 @@ static int vdec_queue_setup(struct vb2_queue *q,
 		unsigned int *num_buffers, unsigned int *num_planes,
 		unsigned int sizes[], struct device *alloc_devs[])
 {
+	struct vdec_core *core = vb2_get_drv_priv(q);
 	printk("vdec_queue_setup\n");
 	*num_planes = 1;
 	
 	switch (q->type) {
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
-		sizes[0] = 1000000; /* Arbitrary 1MB size for compressed buffers */
+		sizes[0] = vdec_get_output_size(core) / 2;
 		*num_buffers = 1;
 		break;
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
-		sizes[0] = 1382400; /* 1280*720*1.5 (4:2:0) */
+		sizes[0] = vdec_get_output_size(core);
 		*num_buffers = 8;
 		break;
 	default:
@@ -258,8 +311,6 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 	struct vdec_core *core = vb2_get_drv_priv(vb->vb2_queue);
 	struct v4l2_m2m_ctx *m2m_ctx = core->m2m_ctx;
 
-	//printk("vdec_vb2_buf_queue: %s\n", vb->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE ? "input" : "output");
-	//printk("Flags = %08X ; Timestamp = %llu\n", vbuf->flags, vb->timestamp);
 	mutex_lock(&core->lock);
 	v4l2_m2m_buf_queue(m2m_ctx, vbuf);
 
@@ -310,12 +361,40 @@ bufs_done:
 	return ret;
 }
 
+void vdec_stop_streaming(struct vb2_queue *q)
+{
+	struct vdec_core *core = vb2_get_drv_priv(q);
+	struct vb2_v4l2_buffer *buf;
+
+	mutex_lock(&core->lock);
+
+	if (core->streamon_out & core->streamon_cap) {
+		vdec_poweroff(core);
+		INIT_LIST_HEAD(&core->bufs);
+		sema_init(&core->queue_sema, 16);
+	}
+
+	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+		while ((buf = v4l2_m2m_src_buf_remove(core->m2m_ctx)))
+			v4l2_m2m_buf_done(buf, VB2_BUF_STATE_ERROR);
+
+		core->streamon_out = 0;
+	} else {
+		while ((buf = v4l2_m2m_dst_buf_remove(core->m2m_ctx)))
+			v4l2_m2m_buf_done(buf, VB2_BUF_STATE_ERROR);
+
+		core->streamon_cap = 0;
+	}
+
+	mutex_unlock(&core->lock);
+}
+
 static const struct vb2_ops vdec_vb2_ops = {
 	.queue_setup = vdec_queue_setup,
 	/*.buf_init = vdec_vb2_buf_init,
 	.buf_prepare = vdec_vb2_buf_prepare,*/
 	.start_streaming = vdec_start_streaming,
-	/*.stop_streaming = vdec_vb2_stop_streaming,*/
+	.stop_streaming = vdec_stop_streaming,
 	.buf_queue = vdec_vb2_buf_queue,
 };
 
@@ -330,98 +409,172 @@ vdec_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 	return 0;
 }
 
-/* All the format logic (try, set, get) needs to be redone */
-static int vdec_try_fmt(struct file *file, void *fh, struct v4l2_format *f)
+static const struct vdec_format vdec_formats[] = {
+	{
+		.pixfmt = V4L2_PIX_FMT_NV12,
+		.num_planes = 1,
+		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+	}, {
+		.pixfmt = V4L2_PIX_FMT_H264,
+		.num_planes = 1,
+		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+	},
+};
+
+static const struct vdec_format * find_format(u32 pixfmt, u32 type)
+{
+	const struct vdec_format *fmt = vdec_formats;
+	unsigned int size = ARRAY_SIZE(vdec_formats);
+	unsigned int i;
+
+	for (i = 0; i < size; i++) {
+		if (fmt[i].pixfmt == pixfmt)
+			break;
+	}
+
+	if (i == size || fmt[i].type != type)
+		return NULL;
+
+	return &fmt[i];
+}
+
+static const struct vdec_format *
+vdec_try_fmt_common(struct v4l2_format *f)
 {
 	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
 	struct v4l2_plane_pix_format *pfmt = pixmp->plane_fmt;
+	const struct vdec_format *fmt;
+	unsigned int p;
 
-	printk("vdec_try_fmt\n");
 	memset(pfmt[0].reserved, 0, sizeof(pfmt[0].reserved));
 	memset(pixmp->reserved, 0, sizeof(pixmp->reserved));
 
-	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-		pixmp->pixelformat = V4L2_PIX_FMT_NV21M;
-	else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
-		pixmp->pixelformat = V4L2_PIX_FMT_H264;
-	else
-		return 0;
+	fmt = find_format(pixmp->pixelformat, f->type);
+	if (!fmt) {
+		if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+			pixmp->pixelformat = V4L2_PIX_FMT_NV12;
+		else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
+			pixmp->pixelformat = V4L2_PIX_FMT_H264;
+		else
+			return NULL;
+		fmt = find_format(pixmp->pixelformat, f->type);
+		pixmp->width = 1280;
+		pixmp->height = 720;
+	}
 
-	pixmp->width = 1280;
-	pixmp->height = 720;
+	pixmp->width = clamp(pixmp->width, 256, 1920);
+	pixmp->height = clamp(pixmp->height, 144, 1080);
 
 	if (pixmp->field == V4L2_FIELD_ANY)
 		pixmp->field = V4L2_FIELD_NONE;
-
-	pixmp->num_planes = 1;
+	pixmp->num_planes = fmt->num_planes;
 	pixmp->flags = 0;
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
-		pfmt[0].sizeimage = 1382400;
-		pfmt[0].bytesperline = ALIGN(pixmp->width, 128);
+		for (p = 0; p < pixmp->num_planes; p++) {
+			pfmt[p].sizeimage =
+				get_output_size(pixmp->width, pixmp->height);
+			pfmt[p].bytesperline = pixmp->width;
+		}
 	} else {
-		pfmt[0].sizeimage = 1000000;
+		pfmt[0].sizeimage = get_output_size(pixmp->width, pixmp->height) / 2;
 		pfmt[0].bytesperline = 0;
 	}
+
+	return fmt;
+}
+
+static int vdec_try_fmt(struct file *file, void *fh, struct v4l2_format *f)
+{
+	vdec_try_fmt_common(f);
 
 	return 0;
 }
 
 static int vdec_g_fmt(struct file *file, void *fh, struct v4l2_format *f)
 {
-	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
-	struct v4l2_plane_pix_format *pfmt = pixmp->plane_fmt;
 	struct vdec_core *core = container_of(file->private_data, struct vdec_core, fh);
-
-	printk("vdec_g_fmt (%s)\n", f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ? "capture" : "output");
-	memset(pfmt[0].reserved, 0, sizeof(pfmt[0].reserved));
-	memset(pixmp->reserved, 0, sizeof(pixmp->reserved));
+	const struct vdec_format *fmt = NULL;
+	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-		pixmp->pixelformat = V4L2_PIX_FMT_NV21M;
+		fmt = core->fmt_cap;
 	else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
-		pixmp->pixelformat = V4L2_PIX_FMT_H264;
-	else
-		return 0;
+		fmt = core->fmt_out;
 
-	pixmp->width = 1280;
-	pixmp->height = 720;
-
-	if (pixmp->field == V4L2_FIELD_ANY)
-		pixmp->field = V4L2_FIELD_NONE;
-
-	pixmp->num_planes = 1;
-	pixmp->flags = 0;
+	pixmp->pixelformat = fmt->pixfmt;
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
-		pfmt[0].sizeimage = 1382400;
-		pfmt[0].bytesperline = ALIGN(pixmp->width, 128);
+		pixmp->width = core->width;
+		pixmp->height = core->height;
 		pixmp->colorspace = core->colorspace;
 		pixmp->ycbcr_enc = core->ycbcr_enc;
 		pixmp->quantization = core->quantization;
 		pixmp->xfer_func = core->xfer_func;
-	} else {
-		pfmt[0].sizeimage = 1000000;
-		pfmt[0].bytesperline = 0;
+	} else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+		pixmp->width = core->width;
+		pixmp->height = core->height;
 	}
+
+	vdec_try_fmt_common(f);
 
 	return 0;
 }
 
 static int vdec_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 {
-	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
-	struct v4l2_plane_pix_format *pfmt = pixmp->plane_fmt;
 	struct vdec_core *core = container_of(file->private_data, struct vdec_core, fh);
+	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
+	struct v4l2_pix_format_mplane orig_pixmp;
+	const struct vdec_format *fmt;
+	struct v4l2_format format;
+	u32 pixfmt_out = 0, pixfmt_cap = 0;
 
-	printk("vdec_s_fmt (%s)\n", f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ? "capture" : "output");
-	
+	orig_pixmp = *pixmp;
+
+	fmt = vdec_try_fmt_common(f);
+
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+		pixfmt_out = pixmp->pixelformat;
+		pixfmt_cap = core->fmt_cap->pixfmt;
+	} else if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+		pixfmt_cap = pixmp->pixelformat;
+		pixfmt_out = core->fmt_out->pixfmt;
+	}
+
+	memset(&format, 0, sizeof(format));
+
+	format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+	format.fmt.pix_mp.pixelformat = pixfmt_out;
+	format.fmt.pix_mp.width = orig_pixmp.width;
+	format.fmt.pix_mp.height = orig_pixmp.height;
+	vdec_try_fmt_common(&format);
+
+	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+		core->width = format.fmt.pix_mp.width;
+		core->height = format.fmt.pix_mp.height;
 		core->colorspace = pixmp->colorspace;
 		core->ycbcr_enc = pixmp->ycbcr_enc;
 		core->quantization = pixmp->quantization;
 		core->xfer_func = pixmp->xfer_func;
 	}
+
+	memset(&format, 0, sizeof(format));
+
+	format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	format.fmt.pix_mp.pixelformat = pixfmt_cap;
+	format.fmt.pix_mp.width = orig_pixmp.width;
+	format.fmt.pix_mp.height = orig_pixmp.height;
+	vdec_try_fmt_common(&format);
+
+	core->width = format.fmt.pix_mp.width;
+	core->height = format.fmt.pix_mp.height;
+
+	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
+		core->fmt_out = fmt;
+	else if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+		core->fmt_cap = fmt;
+
 	return 0;
 }
 
@@ -433,7 +586,7 @@ static int vdec_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		f->pixelformat = V4L2_PIX_FMT_H264;
 	else if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-		f->pixelformat = V4L2_PIX_FMT_NV21M;
+		f->pixelformat = V4L2_PIX_FMT_NV12;
 	else
 		return -EINVAL;
 
@@ -537,13 +690,10 @@ static int vdec_close(struct file *file)
 {
 	struct vdec_core *core = container_of(file->private_data, struct vdec_core, fh);
 
-	/*v4l2_m2m_ctx_release(core->m2m_ctx);
-	printk("ctx_release OK\n");*/
-	/*v4l2_m2m_release(core->m2m_dev);
-	printk("m2m_release OK\n");
+	v4l2_m2m_ctx_release(core->m2m_ctx);
+	v4l2_m2m_release(core->m2m_dev);
 	v4l2_fh_del(&core->fh);
-	printk("fh_del OK\n");
-	v4l2_fh_exit(&core->fh);*/
+	v4l2_fh_exit(&core->fh);
 
 	return 0;
 }
@@ -748,6 +898,8 @@ static void mark_buffers_done(struct work_struct *work) {
 			container_of(work, struct vdec_core, mark_buffers_done_work);
 	struct vdec_buffer *tmp;
 	struct vb2_v4l2_buffer *vbuf;
+	unsigned int flags;
+	u32 output_size = vdec_get_output_size(core);
 
 	while (!list_empty(&core->bufs) &&
 		v4l2_m2m_num_dst_bufs_ready(core->m2m_ctx) &&
@@ -759,7 +911,7 @@ static void mark_buffers_done(struct work_struct *work) {
 			return;
 
 		vbuf = v4l2_m2m_dst_buf_remove(core->m2m_ctx);
-		memcpy(vb2_plane_vaddr(&vbuf->vb2_buf, 0), core->dpb_vaddr + V_BUF_ADDR_OFFSET + tmp->index*1382400, 1382400);
+		memcpy(vb2_plane_vaddr(&vbuf->vb2_buf, 0), core->dpb_vaddr + V_BUF_ADDR_OFFSET + tmp->index * output_size, output_size);
 		vbuf->vb2_buf.timestamp = tmp->timestamp;
 		vbuf->sequence = core->sequence_cap++;
 		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
@@ -771,11 +923,11 @@ static void mark_buffers_done(struct work_struct *work) {
 			writel_relaxed(tmp->index + 1, core->dos_base + AV_SCRATCH_8);
 
 		up(&core->queue_sema);
-		//printk("Recycled buf %d\n", tmp->index);
+		printk("Recycled buf %d ; seq = %d ; flags = %08X ; (timestamp %llu)\n", tmp->index, vbuf->sequence, vbuf->flags, vbuf->vb2_buf.timestamp);
 
-		spin_lock(&core->bufs_spinlock);
+		spin_lock_irqsave(&core->bufs_spinlock, flags);
 		list_del(&tmp->list);
-		spin_unlock(&core->bufs_spinlock);
+		spin_unlock_irqrestore(&core->bufs_spinlock, flags);
 		kfree(tmp);
 	}
 }
@@ -818,7 +970,7 @@ static irqreturn_t vdec_isr(int irq, void *dev)
 			printk("decoder error(s) happened, count %d\n", error_count);
 		}
 
-		//printk("Decoded %d frames\n", num_frame);
+		printk("Decoded %d frames\n", num_frame);
 
 		for (i = 0 ; (i < num_frame) && (!eos) ; i++) {
 
@@ -829,7 +981,7 @@ static irqreturn_t vdec_isr(int irq, void *dev)
 			if (error) {
 				printk("Buffer %d decode error: %08X\n", buffer_index, error);
 			} else {
-				//printk("Buffer %d decoded & ready!\n", buffer_index);
+				printk("Buffer %d decoded & ready!\n", buffer_index);
 			}
 
 			eos = (status >> 15) & 1;
@@ -838,13 +990,11 @@ static irqreturn_t vdec_isr(int irq, void *dev)
 				printk("Reached EOS!\n");
 			}
 
-			/* The decoder will randomly tell us
-			 * that it decoded a buffer index greater than
-			 * what we allocated. This check is also in the original
-			 * code. No idea why.
-			 */
-			if (buffer_index >= 24)
+			/* Fatal error ? */
+			if (buffer_index >= 24) {
+				printk("buffer_index >= 24 !! (%u)\n", buffer_index);
 				continue;
+			}
 
 			fill_buffer_index(core, buffer_index);
 		}
@@ -940,7 +1090,7 @@ static int vdec_probe(struct platform_device *pdev)
 		printk("Failed to request 32MiB VIFOFO buffer\n");
 		return -ENOMEM;
 	}
-	printk("Allocated 16MiB: %08X - %08X\n", core->vififo_paddr, core->vififo_paddr + core->vififo_size);
+	printk("Allocated 32MiB: %08X - %08X\n", core->vififo_paddr, core->vififo_paddr + core->vififo_size);
 
 	ret = esparser_init(pdev, core);
 
@@ -973,13 +1123,15 @@ static int vdec_probe(struct platform_device *pdev)
 	INIT_WORK(&core->mark_buffers_done_work, mark_buffers_done);
 	spin_lock_init(&core->bufs_spinlock);
 	mutex_init(&core->lock);
-	sema_init(&core->queue_sema, 32);
+	sema_init(&core->queue_sema, 16);
+
+	core->fmt_cap = &vdec_formats[0];
+	core->fmt_out = &vdec_formats[1];
 
 	core->vdev_dec = vdev;
 	core->dev_dec = dev;
 
 	video_set_drvdata(vdev, core);
-	pm_runtime_enable(dev);
 
 	return 0;
 
@@ -993,26 +1145,9 @@ static int vdec_remove(struct platform_device *pdev)
 	struct vdec_core *core = dev_get_drvdata(pdev->dev.parent);
 
 	video_unregister_device(core->vdev_dec);
-	pm_runtime_disable(core->dev_dec);
 
 	return 0;
 }
-
-static __maybe_unused int vdec_runtime_suspend(struct device *dev)
-{
-	return 0;
-}
-
-static __maybe_unused int vdec_runtime_resume(struct device *dev)
-{
-	return 0;
-}
-
-static const struct dev_pm_ops vdec_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
-	SET_RUNTIME_PM_OPS(vdec_runtime_suspend, vdec_runtime_resume, NULL)
-};
 
 static const struct of_device_id vdec_dt_match[] = {
 	{ .compatible = "amlogic,meson8b-vdec" },
@@ -1026,7 +1161,6 @@ static struct platform_driver meson_vdec_driver = {
 	.driver = {
 		.name = "meson-vdec",
 		.of_match_table = vdec_dt_match,
-		.pm = &vdec_pm_ops,
 	},
 };
 module_platform_driver(meson_vdec_driver);

@@ -35,10 +35,10 @@
 	#define PS_CFG_MAX_ES_WR_CYCLE_BIT 12
 	#define PS_CFG_PFIFO_EMPTY_CNT_BIT 16
 #define PARSER_CONTROL 0x00
-	#define ES_PACK_SIZE_BIT				8
-	#define ES_WRITE						(1<<5)
-	#define ES_SEARCH					   (1<<1)
-	#define ES_PARSER_START				 (1<<0)
+	#define ES_PACK_SIZE_BIT	8
+	#define ES_WRITE		BIT(5)
+	#define ES_SEARCH		BIT(1)
+	#define ES_PARSER_START		BIT(0)
 #define PFIFO_RD_PTR 0x1c
 #define PFIFO_WR_PTR 0x18
 #define PARSER_SEARCH_PATTERN 0x24
@@ -58,17 +58,14 @@
 #define VLD_MEM_VIFIFO_CURR_PTR 0x3104
 #define VLD_MEM_VIFIFO_END_PTR 0x3108
 #define VLD_MEM_VIFIFO_CONTROL 0x3110
-	#define MEM_BUFCTRL_MANUAL		(1<<1)
-	#define MEM_BUFCTRL_INIT		(1<<0)
-	#define MEM_LEVEL_CNT_BIT	   18
-	#define MEM_FIFO_CNT_BIT		16
-	#define MEM_FILL_ON_LEVEL		(1<<10)
-	#define MEM_CTRL_EMPTY_EN		(1<<2)
-	#define MEM_CTRL_FILL_EN		(1<<1)
-	#define MEM_CTRL_INIT			(1<<0)
+	#define MEM_FIFO_CNT_BIT	16
+	#define MEM_FILL_ON_LEVEL	BIT(10)
+	#define MEM_CTRL_EMPTY_EN	BIT(2)
+	#define MEM_CTRL_FILL_EN	BIT(1)
 #define VLD_MEM_VIFIFO_WP 0x3114
 #define VLD_MEM_VIFIFO_RP 0x3118
 #define VLD_MEM_VIFIFO_BUF_CNTL 0x3120
+	#define MEM_BUFCTRL_MANUAL	BIT(1)
 #define VLD_MEM_VIFIFO_WRAP_COUNT 0x3144
 
 #define SEARCH_PATTERN_LEN   512
@@ -103,8 +100,9 @@ static int first_pkt = 1;
  */
 static void add_buffer_to_list(struct vdec_core *core, struct vdec_buffer *new_buf) {
 	struct vdec_buffer *tmp;
+	unsigned int flags;
 
-	spin_lock(&core->bufs_spinlock);
+	spin_lock_irqsave(&core->bufs_spinlock, flags);
 	if (list_empty(&core->bufs))
 		goto add_core;
 
@@ -118,7 +116,7 @@ static void add_buffer_to_list(struct vdec_core *core, struct vdec_buffer *new_b
 add_core:
 	list_add_tail(&new_buf->list, &core->bufs);
 unlock:
-	spin_unlock(&core->bufs_spinlock);
+	spin_unlock_irqrestore(&core->bufs_spinlock, flags);
 }
 
 int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
@@ -127,8 +125,17 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 	int ret;
 	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(&vbuf->vb2_buf, 0);
 
-	//printk("Putting buffer with address %08X; len %d\n", phy, vb2_get_plane_payload(vb, 0));
-	down(&core->queue_sema);
+	printk("Putting buffer with address %08X; len %d ; flags %08X\n", phy, vb2_get_plane_payload(vb, 0), vbuf->flags);
+
+	/* If the semaphore is locked, we have queued in 16 buffers
+	 * and no slots are available. Most likely because we haven't recycled the buffers
+	 * off the decoder yet.
+	 * There are so many calls to schedule_work(&core->mark_buffers_done_work)
+	 * that I might need to make it a thread instead..
+	 */
+	while (down_timeout(&core->queue_sema, HZ/100) < 0)
+		schedule_work(&core->mark_buffers_done_work);
+
 	wmb();
 	writel_relaxed(0, core->esparser_base + PFIFO_RD_PTR);
 	writel_relaxed(0, core->esparser_base + PFIFO_WR_PTR);
@@ -144,13 +151,15 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 
 	v4l2_m2m_src_buf_remove_by_buf(core->m2m_ctx, vbuf);
 	if (ret > 0) {
-		//msleep(30); // Don't go too fast.. Very hacky for now
 		schedule_work(&core->mark_buffers_done_work);
+
 		new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
 		new_buf->timestamp = vb->timestamp;
 		new_buf->index = -1;
-
 		add_buffer_to_list(core, new_buf);
+
+		vbuf->flags = 0;
+		vbuf->field = V4L2_FIELD_NONE;
 		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 	} else if (ret <= 0) {
 		printk("Write timeout\n");
@@ -164,15 +173,15 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 int esparser_power_up(struct vdec_core *core) {
 	// WRITE_MPEG_REG(FEC_INPUT_CONTROL, 0);
 	writel_relaxed((10 << PS_CFG_PFIFO_EMPTY_CNT_BIT) |
-				   (1  << PS_CFG_MAX_ES_WR_CYCLE_BIT)|
-				   (16 << PS_CFG_MAX_FETCH_CYCLE_BIT),
-				   core->esparser_base + PARSER_CONFIG);
+				(1  << PS_CFG_MAX_ES_WR_CYCLE_BIT) |
+				(16 << PS_CFG_MAX_FETCH_CYCLE_BIT),
+				core->esparser_base + PARSER_CONFIG);
 
 	writel_relaxed(0, core->esparser_base + PFIFO_RD_PTR);
 	writel_relaxed(0, core->esparser_base + PFIFO_WR_PTR);
 
 	writel_relaxed(ES_START_CODE_PATTERN, core->esparser_base + PARSER_SEARCH_PATTERN);
-	writel_relaxed(ES_START_CODE_MASK,	core->esparser_base + PARSER_SEARCH_MASK);
+	writel_relaxed(ES_START_CODE_MASK,    core->esparser_base + PARSER_SEARCH_MASK);
 
 	writel_relaxed((10 << PS_CFG_PFIFO_EMPTY_CNT_BIT) |
 				   (1  << PS_CFG_MAX_ES_WR_CYCLE_BIT) |
@@ -214,7 +223,7 @@ int stbuf_power_up(struct vdec_core *core) {
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) |  1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) | (0x11 << 16) | MEM_FILL_ON_LEVEL | MEM_CTRL_FILL_EN | MEM_CTRL_EMPTY_EN, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) | (0x11 << MEM_FIFO_CNT_BIT) | MEM_FILL_ON_LEVEL | MEM_CTRL_FILL_EN | MEM_CTRL_EMPTY_EN, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 
 	return 0;
 }

@@ -111,8 +111,6 @@ static int meson_pwrc_vdec_probe(struct platform_device *pdev)
 		ret = meson_pwrc_vdec_setup_clk(&vdec_pd);
 		if (ret)
 			return ret;
-	} else {
-		meson_pwrc_vdec_power_on(&vdec_pd.genpd);
 	}
 
 	return of_genpd_add_provider_simple(pdev->dev.of_node,

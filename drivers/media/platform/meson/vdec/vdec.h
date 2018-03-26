@@ -32,6 +32,12 @@ struct vdec_buffer {
 	u64 timestamp;
 };
 
+struct vdec_format {
+	u32 pixfmt;
+	unsigned int num_planes;
+	u32 type;
+};
+
 struct vdec_core {
 	void __iomem *dos_base;
 	void __iomem *esparser_base;
@@ -77,6 +83,10 @@ struct vdec_core {
 	/* Capture sequence counter */
 	unsigned int sequence_cap;
 
+	const struct vdec_format *fmt_out;
+	const struct vdec_format *fmt_cap;
+	u32 width;
+	u32 height;
 	u32 colorspace;
 	u8 ycbcr_enc;
 	u8 quantization;

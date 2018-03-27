@@ -92,15 +92,13 @@ static irqreturn_t esparser_isr(int irq, void *dev) {
 	return IRQ_HANDLED;
 }
 
-static int first_pkt = 1;
-
 /**
  * Userspace is very likely to feed us packets with timestamps not in chronological order
  * because of B-frames. Rearrange them here.
  */
 static void add_buffer_to_list(struct vdec_core *core, struct vdec_buffer *new_buf) {
 	struct vdec_buffer *tmp;
-	unsigned int flags;
+	unsigned long flags;
 
 	spin_lock_irqsave(&core->bufs_spinlock, flags);
 	if (list_empty(&core->bufs))
@@ -125,16 +123,18 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 	int ret;
 	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(&vbuf->vb2_buf, 0);
 
-	printk("Putting buffer with address %08X; len %d ; flags %08X\n", phy, vb2_get_plane_payload(vb, 0), vbuf->flags);
+	v4l2_m2m_src_buf_remove_by_buf(core->m2m_ctx, vbuf);
+	//printk("Putting buffer with address %08X; len %d ; flags %08X\n", phy, vb2_get_plane_payload(vb, 0), vbuf->flags);
 
 	/* If the semaphore is locked, we have queued in 16 buffers
 	 * and no slots are available. Most likely because we haven't recycled the buffers
 	 * off the decoder yet.
-	 * There are so many calls to schedule_work(&core->mark_buffers_done_work)
-	 * that I might need to make it a thread instead..
 	 */
-	while (down_timeout(&core->queue_sema, HZ/100) < 0)
-		schedule_work(&core->mark_buffers_done_work);
+	if (down_timeout(&core->queue_sema, HZ) < 0) {
+		printk("esparser timeout - no input buffer slot available in time\n");
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+		return -ENODEV;
+	}
 
 	wmb();
 	writel_relaxed(0, core->esparser_base + PFIFO_RD_PTR);
@@ -149,10 +149,7 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 
 	ret = wait_event_interruptible_timeout(wq, search_done != 0, HZ/5);
 
-	v4l2_m2m_src_buf_remove_by_buf(core->m2m_ctx, vbuf);
 	if (ret > 0) {
-		schedule_work(&core->mark_buffers_done_work);
-
 		new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
 		new_buf->timestamp = vb->timestamp;
 		new_buf->index = -1;

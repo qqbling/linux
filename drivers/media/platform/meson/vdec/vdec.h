@@ -56,9 +56,9 @@ struct vdec_core {
 	struct mutex lock;
 
 	/* Big contiguous area for the Decoded Picture Buffer */
-	void *dpb_vaddr;
+	/*void *dpb_vaddr;
 	dma_addr_t dpb_paddr;
-	u32 dpb_size;
+	u32 dpb_size;*/
 
 	/* Big contiguous area for the VIFIFO */
 	void *vififo_vaddr;
@@ -76,6 +76,11 @@ struct vdec_core {
 	/* The decoder requires a "post canvas", don't really know what it's for */
 	void      *dummy_post_canvas_vaddr;
 	dma_addr_t dummy_post_canvas_paddr;
+
+	/* Buffer for the H.264 decoder. Unk (1.24 MiB), References MV (1 MiB), Unk (3 MiB) */
+	void      *vh264_mem_vaddr;
+	dma_addr_t vh264_mem_paddr;
+	u32	   vh264_mem_size;
 
 	/* Whether capture/output streaming are on */
 	unsigned int streamon_cap, streamon_out;
@@ -95,7 +100,11 @@ struct vdec_core {
 	/* Buffers queued into the HW */
 	struct list_head bufs;
 	spinlock_t bufs_spinlock;
-	struct work_struct mark_buffers_done_work;
+	//struct work_struct mark_buffers_done_work;
+	struct task_struct *buffers_done_thread;
+
+	/* Buffers that need to be recycled by the HW */
+	struct list_head bufs_recycle;
 
 	struct semaphore queue_sema;
 };

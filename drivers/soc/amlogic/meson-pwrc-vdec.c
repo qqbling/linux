@@ -37,6 +37,7 @@ static int meson_pwrc_vdec_power_off(struct generic_pm_domain *genpd)
 {
 	struct meson_pwrc_vdec *pd = genpd_to_pd(genpd);
 
+	printk("meson_pwrc_vdec_power_off\n");
 	regmap_update_bits(pd->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
 			GEN_PWR_VDEC_1, GEN_PWR_VDEC_1);
 	udelay(20);
@@ -60,9 +61,10 @@ static int meson_pwrc_vdec_power_on(struct generic_pm_domain *genpd)
 {
 	struct meson_pwrc_vdec *pd = genpd_to_pd(genpd);
 
+	printk("meson_pwrc_vdec_power_on\n");
 	meson_pwrc_vdec_setup_clk(pd);
 	regmap_update_bits(pd->regmap_ao, AO_RTI_GEN_PWR_SLEEP0, GEN_PWR_VDEC_1, 0);
-	udelay(10);
+	udelay(20);
 
 	return 0;
 }
@@ -103,7 +105,7 @@ static int meson_pwrc_vdec_probe(struct platform_device *pdev)
 
 	powered_off = meson_pwrc_vdec_get_power(&vdec_pd);
 
-	pm_genpd_init(&vdec_pd.genpd, &pm_domain_always_on_gov,
+	pm_genpd_init(&vdec_pd.genpd, &simple_qos_governor,
 		      powered_off);
 
 	/* If already powered, sync the clock states */

@@ -368,13 +368,13 @@
 	clock-names = "vpu_intr", "dos_parser", "vdec_1";
 
 	assigned-clocks = <&clkc CLKID_VDEC_1_SEL>,
-					  <&clkc CLKID_VDEC_1>;
+			  <&clkc CLKID_VDEC_1>;
 
-	assigned-clock-parents = <&clkc CLKID_FCLK_DIV7>,
-							 <0>;
+	assigned-clock-parents = <&clkc CLKID_FCLK_DIV4>,
+				 <0>;
 
 	assigned-clock-rates = <0>,
-						   <200000000>;
+			       <318750000>;
 };
 
 &wdt {

@@ -33,6 +33,8 @@
 #define MPSR 0x0c04
 #define CPSR 0x0c84
 
+#define LMEM_DMA_CTRL 0x0d40
+
 #define MC_STATUS0  0x2424
 #define MC_CTRL1    0x242c
 #define PSCALE_CTRL 0x2444
@@ -61,6 +63,8 @@
 #define AV_SCRATCH_G  0x2740
 
 #define POWER_CTL_VLD 0x3020
+
+#define DCAC_DMA_CTRL 0x3848
 
 #define DOS_SW_RESET0 0xfc00
 
@@ -107,15 +111,14 @@ static int vdec_load_firmware(struct vdec_core *core, const char* fwname)
 		return -EINVAL;
 	}
 
-	writel_relaxed(1, core->dos_base + MPSR);
-	writel_relaxed(1, core->dos_base + CPSR);
+	writel_relaxed(0, core->dos_base + MPSR);
+	writel_relaxed(0, core->dos_base + CPSR);
 
 	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) & ~(1<<31), core->dos_base + MDEC_PIC_DC_CTRL);
 	writel_relaxed(mc_addr_map, core->dos_base + 0xd04); // IMEM_DMA_ADR
 	writel_relaxed(MC_SIZE, core->dos_base + 0xd08); // IMEM_DMA_COUNT
 	writel_relaxed((0x8000 | (7 << 16)), core->dos_base + 0xd00); // IMEM_DMA_CTRL ; Magic value from AML code
 
-	printk("Starting wait..\n");
 	while (--i && readl(core->dos_base + 0xd00) & 0x8000) { }
 
 	if (i == 0) {
@@ -139,17 +142,18 @@ static void vdec_abort(struct vdec_core *core) {
 }
 
 static void vh264_power_up(struct vdec_core *core) {
+	while (readl_relaxed(core->dos_base + DCAC_DMA_CTRL) & 0x8000) { }
+	while (readl_relaxed(core->dos_base + LMEM_DMA_CTRL) & 0x8000) { }
+
 	/* Taken from old AMLogic code. No idea. */
 	writel_relaxed((1<<7) | (1<<6) | (1<<4), core->dos_base + DOS_SW_RESET0);
 	writel_relaxed(0, core->dos_base + DOS_SW_RESET0);
-	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 
 	writel_relaxed((1<<7) | (1<<6) | (1<<4), core->dos_base + DOS_SW_RESET0);
 	writel_relaxed(0, core->dos_base + DOS_SW_RESET0);
 	writel_relaxed((1<<9) | (1<<8), core->dos_base + DOS_SW_RESET0);
 	writel_relaxed(0, core->dos_base + DOS_SW_RESET0);
-	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 
 	writel_relaxed(readl_relaxed(core->dos_base + POWER_CTL_VLD) | (1 << 9) | (1 << 6), core->dos_base + POWER_CTL_VLD);
@@ -192,21 +196,22 @@ static int vdec_poweron(struct vdec_core *core) {
 	printk("vdec_poweron\n");
 
 	/* Reset VDEC1 */
-	writel(0xfffffffc, core->dos_base + DOS_SW_RESET0);
-	writel(0x00000000, core->dos_base + DOS_SW_RESET0);
+	writel_relaxed(0xfffffffc, core->dos_base + DOS_SW_RESET0);
+	writel_relaxed(0x00000000, core->dos_base + DOS_SW_RESET0);
 
-	writel(0x3ff, core->dos_base + 0xfc04); // DOS_GCLK_EN0
+	writel_relaxed(0x3ff, core->dos_base + 0xfc04); // DOS_GCLK_EN0
 
 	/* VDEC Memories */
-	writel(0x00000000, core->dos_base + 0xfcc0);
+	writel_relaxed(0x00000000, core->dos_base + 0xfcc0);
 
 	/* Remove VDEC1 Isolation */
 	regmap_write(core->regmap_ao, 0xec, 0x00000000);
 
 	/* Reset DOS top registers */
-	writel(0x00000000, core->dos_base + 0xfd00);
+	writel_relaxed(0x00000000, core->dos_base + 0xfd00);
 
 	writel_relaxed(0x3ff, core->dos_base + 0x260c); // GCLK_EN
+	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) & ~(1<<31), core->dos_base + MDEC_PIC_DC_CTRL);
 
 	stbuf_power_up(core);
 
@@ -242,8 +247,16 @@ static void vdec_poweroff(struct vdec_core *core) {
 	writel_relaxed(0, core->dos_base + MPSR);
 	writel_relaxed(0, core->dos_base + CPSR);
 
+	while (readl_relaxed(core->dos_base + 0xd00) & 0x8000) { }
+
+	readl_relaxed(core->dos_base + DOS_SW_RESET0);
+	readl_relaxed(core->dos_base + DOS_SW_RESET0);
+	readl_relaxed(core->dos_base + DOS_SW_RESET0);
+
 	writel_relaxed((1<<12)|(1<<11), core->dos_base + DOS_SW_RESET0);
 	writel_relaxed(0, core->dos_base + DOS_SW_RESET0);
+
+	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 
@@ -264,6 +277,8 @@ static void vdec_poweroff(struct vdec_core *core) {
 	readl_relaxed(core->dos_base + MC_STATUS0);
 	readl_relaxed(core->dos_base + MC_STATUS0);
 
+	while (readl_relaxed(core->dos_base + DCAC_DMA_CTRL) & 0x8000) { }
+
 	/* enable vdec1 isolation */
 	regmap_write(core->regmap_ao, 0xec, 0xc0);
 	/* power off vdec1 memories */
@@ -279,9 +294,8 @@ void vdec_m2m_device_run(void *priv) {
 	printk("vdec_m2m_device_run\n");
 	mutex_lock(&core->lock);
 
-	v4l2_m2m_for_each_src_buf_safe(core->m2m_ctx, buf, n) {
-		esparser_process_buf(core, &buf->vb);
-	}
+	core->input_buf_ready = 1;
+	wake_up_interruptible(&core->input_buf_wq);
 
 	mutex_unlock(&core->lock);
 }
@@ -330,7 +344,9 @@ static void vdec_queue_recycle(struct vdec_core *core, struct vb2_buffer *vb)
 	new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
 	new_buf->index = vb->index;
 
+	mutex_lock(&core->bufs_recycle_lock);
 	list_add_tail(&new_buf->list, &core->bufs_recycle);
+	mutex_unlock(&core->bufs_recycle_lock);
 }
 
 static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
@@ -345,8 +361,10 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 	if (!(core->streamon_out & core->streamon_cap))
 		goto unlock;
 	
-	if (vb->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
-		esparser_process_buf(core, vbuf);
+	if (vb->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+		core->input_buf_ready = 1;
+		wake_up_interruptible(&core->input_buf_wq);
+	}
 	else
 		vdec_queue_recycle(core, vb);
 
@@ -371,7 +389,7 @@ static int mark_buffers_done(void *data)
 			vbuf = v4l2_m2m_dst_buf_remove_by_idx(core->m2m_ctx, tmp->index);
 			if (!vbuf) {
 				printk("HW buffer ready but we don't have the vb2 buffer !!!\n");
-				continue;
+				break;
 			}
 
 			vbuf->vb2_buf.timestamp = tmp->timestamp;
@@ -386,6 +404,7 @@ static int mark_buffers_done(void *data)
 			kfree(tmp);
 		}
 
+		mutex_lock(&core->bufs_recycle_lock);
 		while (!list_empty(&core->bufs_recycle) &&
 		      (!readl_relaxed(core->dos_base + AV_SCRATCH_7) ||
 		       !readl_relaxed(core->dos_base + AV_SCRATCH_8)))
@@ -405,8 +424,9 @@ static int mark_buffers_done(void *data)
 
 			up(&core->queue_sema);
 		}
+		mutex_unlock(&core->bufs_recycle_lock);
 
-		msleep(20);
+		usleep_range(5000, 10000);
 	}
 
 	return 0;
@@ -430,6 +450,7 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 		return 0;
 	}
 
+	pm_runtime_get_sync(core->dev_dec);
 	ret = vdec_poweron(core);
 	if (ret)
 		goto bufs_done;
@@ -438,6 +459,7 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 
 	printk("Launching thread\n");
 	core->buffers_done_thread = kthread_run(mark_buffers_done, core, "buffers_done");
+	core->esparser_queue_thread = kthread_run(esparser_queue, core, "esparser_queue");
 	printk("start_streaming done\n");
 	mutex_unlock(&core->lock);
 
@@ -457,14 +479,18 @@ void vdec_stop_streaming(struct vb2_queue *q)
 	struct vdec_core *core = vb2_get_drv_priv(q);
 	struct vb2_v4l2_buffer *buf;
 
+	printk("vdec_stop_streaming\n");
 	mutex_lock(&core->lock);
 
 	if (core->streamon_out & core->streamon_cap) {
+		kthread_stop(core->esparser_queue_thread);
 		kthread_stop(core->buffers_done_thread);
 		vdec_poweroff(core);
+		pm_runtime_put_sync(core->dev_dec);
 		INIT_LIST_HEAD(&core->bufs);
 		INIT_LIST_HEAD(&core->bufs_recycle);
-		sema_init(&core->queue_sema, 20);
+		sema_init(&core->queue_sema, 24);
+		core->input_buf_ready = 0;
 	}
 
 	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
@@ -526,6 +552,30 @@ static const struct vdec_format * find_format(u32 pixfmt, u32 type)
 	}
 
 	if (i == size || fmt[i].type != type)
+		return NULL;
+
+	return &fmt[i];
+}
+
+static const struct vdec_format *
+find_format_by_index(unsigned int index, u32 type)
+{
+	const struct vdec_format *fmt = vdec_formats;
+	unsigned int size = ARRAY_SIZE(vdec_formats);
+	unsigned int i, k = 0;
+
+	if (index > size)
+		return NULL;
+
+	for (i = 0; i < size; i++) {
+		if (fmt[i].type != type)
+			continue;
+		if (k == index)
+			break;
+		k++;
+	}
+
+	if (i == size)
 		return NULL;
 
 	return &fmt[i];
@@ -677,15 +727,16 @@ static int vdec_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 
 static int vdec_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 {
+	const struct vdec_format *fmt;
+
 	printk("vdec_enum_fmt\n");
 	memset(f->reserved, 0, sizeof(f->reserved));
 
-	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
-		f->pixelformat = V4L2_PIX_FMT_H264;
-	else if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-		f->pixelformat = V4L2_PIX_FMT_NV21M;
-	else
+	fmt = find_format_by_index(f->index, f->type);
+	if (!fmt)
 		return -EINVAL;
+
+	f->pixelformat = fmt->pixfmt;
 
 	return 0;
 }
@@ -762,7 +813,6 @@ static int vdec_open(struct file *file)
 	struct vdec_core *core = video_drvdata(file);
 
 	printk("vdec_open\n");
-	pm_runtime_get_sync(core->dev_dec);
 
 	core->m2m_dev = v4l2_m2m_init(&vdec_m2m_ops);
 	if (IS_ERR(core->m2m_dev)) {
@@ -795,8 +845,6 @@ static int vdec_close(struct file *file)
 	v4l2_fh_del(&core->fh);
 	v4l2_fh_exit(&core->fh);
 
-	pm_runtime_put_sync(core->dev_dec);
-
 	return 0;
 }
 
@@ -822,6 +870,7 @@ static void vdec_set_param(struct vdec_core *core) {
 	u32 mb_mv_byte;
 	u32 addr;
 	u32 actual_dpb_size = v4l2_m2m_num_dst_bufs_ready(core->m2m_ctx);
+	u32 max_dpb_size = 4;
 	struct v4l2_m2m_buffer *buf;
 
 	writel_relaxed(0, core->dos_base + AV_SCRATCH_7);
@@ -873,6 +922,11 @@ static void vdec_set_param(struct vdec_core *core) {
 				(cnv_y_idx), core->dos_base + ANC0_CANVAS_ADDR + buf_idx*4);
 	}
 
+	if (max_reference_size >= max_dpb_size) {
+		max_dpb_size = max_reference_size;
+		max_reference_size++;
+	}
+
 	/* I don't really know the purpose of this post canvas.
 	 * It seems required with the write to AV_SCRATCH_3 though..
 	 */
@@ -882,7 +936,7 @@ static void vdec_set_param(struct vdec_core *core) {
 	/* Setup post canvas for U/V */
 	vdec_canvas_setup(core->dmc_base, 0x1, core->dummy_post_canvas_paddr + (mb_total << 8), mb_width << 4, mb_height << 3, MESON_CANVAS_WRAP_NONE, MESON_CANVAS_BLKMODE_LINEAR);
 
-	printk("mb_total = %d; mb_mv_byte = %d; actual_dpb_size = %d;\n max_reference_size = %d; mb_width = %d; mb_height = %d\n", mb_total, mb_mv_byte, actual_dpb_size, max_reference_size, mb_width, mb_height);
+	printk("mb_total = %d; mb_mv_byte = %d; actual_dpb_size = %d; max_dpb_size = %d\n max_reference_size = %d; mb_width = %d; mb_height = %d\n", mb_total, mb_mv_byte, actual_dpb_size, max_dpb_size, max_reference_size, mb_width, mb_height);
 
 	printk("Setting POST CANVAS to %08X\n", (0x1 << 16) | (0x1 << 8) | 0x0);
 	writel_relaxed((0x1 << 16) | (0x1 << 8) | 0x0, core->dos_base + AV_SCRATCH_3);
@@ -898,7 +952,7 @@ static void vdec_set_param(struct vdec_core *core) {
 	printk("Remaining buffer size: %d\n", core->vh264_mem_paddr + core->vh264_mem_size - addr);
 
 	/* Hardcode max_dpb_size to 4 because I'm not sure what it is */
-	writel_relaxed((max_reference_size << 24) | (actual_dpb_size << 16) | (4 << 8), core->dos_base + AV_SCRATCH_0);
+	writel_relaxed((max_reference_size << 24) | (actual_dpb_size << 16) | (max_dpb_size << 8), core->dos_base + AV_SCRATCH_0);
 }
 
 /* Map a ready HW buffer index with a previously queued OUTPUT buffer's timestamp */
@@ -1105,10 +1159,12 @@ static int vdec_probe(struct platform_device *pdev)
 
 	INIT_LIST_HEAD(&core->bufs);
 	INIT_LIST_HEAD(&core->bufs_recycle);
+	init_waitqueue_head(&core->input_buf_wq);
 	//INIT_WORK(&core->mark_buffers_done_work, mark_buffers_done);
 	spin_lock_init(&core->bufs_spinlock);
 	mutex_init(&core->lock);
-	sema_init(&core->queue_sema, 20);
+	mutex_init(&core->bufs_recycle_lock);
+	sema_init(&core->queue_sema, 24);
 
 	core->fmt_cap = &vdec_formats[0];
 	core->fmt_out = &vdec_formats[1];

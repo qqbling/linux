@@ -105,8 +105,13 @@ struct vdec_core {
 
 	/* Buffers that need to be recycled by the HW */
 	struct list_head bufs_recycle;
+	struct mutex bufs_recycle_lock;
 
+	/* */
+	struct task_struct *esparser_queue_thread;
 	struct semaphore queue_sema;
+	u32 input_buf_ready;
+	wait_queue_head_t input_buf_wq;
 };
 
 #endif

@@ -282,12 +282,12 @@
 		vdec: video-decoder@0xd0050000 {
 			compatible = "amlogic,meson8b-vdec";
 			reg = <0xd0050000 0x10000
-				   0xc110a580 0xe4
-				   0xc8006000 0x60>;
+			       0xc110a580 0xe4
+			       0xc8006000 0x60>;
 			reg-names = "dos", "esparser", "dmc";
 
 			interrupts = <GIC_SPI 44 IRQ_TYPE_EDGE_RISING
-						  GIC_SPI 32 IRQ_TYPE_EDGE_RISING>;
+				      GIC_SPI 32 IRQ_TYPE_EDGE_RISING>;
 			interrupt-names = "vdecirq", "esparserirq";
 
 			amlogic,ao-sysctrl = <&sysctrl_ao>;

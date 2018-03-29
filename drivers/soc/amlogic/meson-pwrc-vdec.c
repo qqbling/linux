@@ -50,6 +50,7 @@ static int meson_pwrc_vdec_power_off(struct generic_pm_domain *genpd)
 }
 
 static int meson_pwrc_vdec_setup_clk(struct meson_pwrc_vdec *pd) {
+	printk("meson_pwrc_vdec_setup_clk\n");
 	clk_prepare_enable(pd->dos_parser_clk);
 	clk_prepare_enable(pd->vpu_intr_clk);
 	clk_prepare_enable(pd->vdec_1_clk);
@@ -73,6 +74,7 @@ static bool meson_pwrc_vdec_get_power(struct meson_pwrc_vdec *pd)
 {
 	u32 reg;
 	
+	printk("meson_pwrc_vdec_get_power\n");
 	regmap_read(pd->regmap_ao, AO_RTI_GEN_PWR_SLEEP0, &reg);
 
 	return ((reg & GEN_PWR_VDEC_1) == GEN_PWR_VDEC_1);
@@ -92,6 +94,7 @@ static int meson_pwrc_vdec_probe(struct platform_device *pdev)
 	bool powered_off;
 	int ret;
 
+	printk("Probe!\n");
 	regmap_ao = syscon_node_to_regmap(of_get_parent(pdev->dev.of_node));
 	if (IS_ERR(regmap_ao)) {
 		dev_err(&pdev->dev, "failed to get AO regmap\n");

@@ -125,5 +125,7 @@
 #define CLKID_VAPB_1		138
 #define CLKID_VAPB_SEL		139
 #define CLKID_VAPB		140
+#define CLKID_VDEC_1_SEL	151
+#define CLKID_VDEC_1		153
 
 #endif /* __GXBB_CLKC_H */

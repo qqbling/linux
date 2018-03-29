@@ -1,4 +1,5 @@
 #include <linux/clk.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/mfd/syscon.h>
@@ -20,7 +21,8 @@
 #define MC_H264_EXT_SIZE	(4096 * 5)
 #define MAX_DPB_BUFF_SIZE	(12*1024*1024) // Big enough for a 3840*2160 4:2:0 buffer
 #define DEF_BUF_START_ADDR	0x1000000
-#define V_BUF_ADDR_OFFSET	0x13e000
+//#define V_BUF_ADDR_OFFSET	0x13e000 /*  < GXTVBB */
+#define V_BUF_ADDR_OFFSET	0x1ee000 /* >= GXTVBB */
 
 #define UNK1_SIZE 0x13e000
 #define REF_SIZE  0x100000
@@ -69,7 +71,7 @@
 #define DOS_SW_RESET0 0xfc00
 
 static int vh264_load_extended_firmware(struct vdec_core *core, const struct firmware *fw) {
-	core->vh264_ext_fw_vaddr = dma_alloc_coherent(NULL, MC_H264_EXT_SIZE, &core->vh264_ext_fw_paddr, GFP_KERNEL);
+	core->vh264_ext_fw_vaddr = dma_alloc_coherent(core->dev, MC_H264_EXT_SIZE, &core->vh264_ext_fw_paddr, GFP_KERNEL);
 
 	if (!core->vh264_ext_fw_vaddr) {
 		printk("Couldn't allocate memory for H.264 extended firmware\n");
@@ -105,7 +107,7 @@ static int vdec_load_firmware(struct vdec_core *core, const char* fwname)
 		return -ENOMEM;
 
 	memcpy(mc_addr, fw->data, MC_SIZE);
-	mc_addr_map = dma_map_single(NULL, mc_addr, MC_SIZE, DMA_TO_DEVICE);
+	mc_addr_map = dma_map_single(core->dev, mc_addr, MC_SIZE, DMA_TO_DEVICE);
 	if (!mc_addr_map) {
 		dev_err(dev, "Couldn't MAP DMA addr\n");
 		return -EINVAL;
@@ -129,7 +131,7 @@ static int vdec_load_firmware(struct vdec_core *core, const char* fwname)
 
 	vh264_load_extended_firmware(core, fw);
 
-	dma_unmap_single(NULL, mc_addr_map, MC_SIZE, DMA_TO_DEVICE);
+	dma_unmap_single(core->dev, mc_addr_map, MC_SIZE, DMA_TO_DEVICE);
 	kfree(mc_addr);
 	release_firmware(fw);
 	return ret;
@@ -216,7 +218,7 @@ static int vdec_poweron(struct vdec_core *core) {
 	stbuf_power_up(core);
 
 	/*TODO: power up the decoder related to the input PIXFMT */
-	ret = vdec_load_firmware(core, "meson/m8/vh264_mc");
+	ret = vdec_load_firmware(core, "meson/gxl/gxtvbb_vh264_mc");
 	if (ret)
 		return ret;
 
@@ -289,7 +291,6 @@ static void vdec_poweroff(struct vdec_core *core) {
 
 void vdec_m2m_device_run(void *priv) {
 	struct vdec_core *core = priv;
-	struct v4l2_m2m_buffer *buf, *n;
 
 	printk("vdec_m2m_device_run\n");
 	mutex_lock(&core->lock);
@@ -395,8 +396,6 @@ static int mark_buffers_done(void *data)
 			vbuf->vb2_buf.timestamp = tmp->timestamp;
 			vbuf->sequence = core->sequence_cap++;
 			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
-
-			//printk("Recycled buf %d ; seq = %d ; flags = %08X ; (timestamp %llu)\n", tmp->index, vbuf->sequence, vbuf->flags, vbuf->vb2_buf.timestamp);
 
 			spin_lock_irqsave(&core->bufs_spinlock, flags);
 			list_del(&tmp->list);
@@ -1065,7 +1064,7 @@ static int vdec_probe(struct platform_device *pdev)
 	}
 
 	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, "dmc");
-	core->dmc_base = devm_ioremap_resource(dev, r);
+	core->dmc_base = devm_ioremap(dev, r->start, resource_size(r));
 	if (IS_ERR(core->dmc_base)) {
 		printk("Couldn't remap DMC memory\n");
 		return PTR_ERR(core->dmc_base);
@@ -1095,32 +1094,21 @@ static int vdec_probe(struct platform_device *pdev)
 
 	/* TODO: do the allocations at start_stream to not hog memory */
 
-	/* Allocate 64 MiB for the DPB buffers <-- Obsolete since we map the canvases to the user buffers
-	 * TODO: Pretty sure most of that chunk can be directly mapped to user buffers? must test.
-	*/
-	/*core->dpb_size = 0x4000000;
-	core->dpb_vaddr = dma_alloc_coherent(NULL, core->dpb_size, &core->dpb_paddr, GFP_KERNEL);
-	if (!core->dpb_vaddr) {
-		printk("Failed to request 64MiB DPB video buffer\n");
-		return -ENOMEM;
-	}
-	printk("Allocated 64MiB: %08X - %08X\n", core->dpb_paddr, core->dpb_paddr + core->dpb_size);*/
-
 	/* Allocate some memory for the H.264 decoder's state
 	 * (references motion vectors, and other things)
 	 * TODO: move this to a specific H.264 subdevice file
 	 */
-	core->vh264_mem_size = UNK1_SIZE + REF_SIZE + UNK2_SIZE;
-	core->vh264_mem_vaddr = dma_alloc_coherent(NULL, core->vh264_mem_size, &core->vh264_mem_paddr, GFP_KERNEL);
+	core->vh264_mem_size = 0x800000;
+	core->vh264_mem_vaddr = dma_alloc_coherent(dev, core->vh264_mem_size, &core->vh264_mem_paddr, GFP_KERNEL);
 	if (!core->vh264_mem_vaddr) {
-		printk("Failed to request 5.24MiB H.264 extra memory\n");
+		printk("Failed to request 8MiB H.264 extra memory\n");
 		return -ENOMEM;
 	}
-	printk("Allocated 5.24MiB: %08X - %08X\n", core->vh264_mem_paddr, core->vh264_mem_paddr + core->vh264_mem_size);
+	printk("Allocated 8MiB: %08X - %08X\n", core->vh264_mem_paddr, core->vh264_mem_paddr + core->vh264_mem_size);
 
 	/* Allocate 32 MiB for the VIFIFO buffer */
 	core->vififo_size = 0x2000000;
-	core->vififo_vaddr = dma_alloc_coherent(NULL, core->vififo_size, &core->vififo_paddr, GFP_KERNEL);
+	core->vififo_vaddr = dma_alloc_coherent(dev, core->vififo_size, &core->vififo_paddr, GFP_KERNEL);
 	if (!core->vififo_vaddr) {
 		printk("Failed to request 32MiB VIFOFO buffer\n");
 		return -ENOMEM;
@@ -1132,7 +1120,7 @@ static int vdec_probe(struct platform_device *pdev)
 	/* Allocate a "post canvas", purpose unknown
 	 * TODO: move this to a specific H.264 subdevice file
 	 */
-	core->dummy_post_canvas_vaddr = dma_alloc_coherent(NULL, 0x400000, &core->dummy_post_canvas_paddr, GFP_KERNEL);
+	core->dummy_post_canvas_vaddr = dma_alloc_coherent(dev, 0x400000, &core->dummy_post_canvas_paddr, GFP_KERNEL);
 	if (!core->dummy_post_canvas_paddr) {
 		printk("Failed to request 4MiB post canvas\n");
 		return -ENOMEM;

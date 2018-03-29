@@ -347,6 +347,12 @@
 					amlogic,hhi-sysctrl = <&sysctrl>;
 				};
 
+				pwrc_vdec: power-controller-vdec@0 {
+					//reg = <0x0 0x80 0x0 0x80>;
+					compatible = "amlogic,meson-pwrc-vdec";
+					#power-domain-cells = <0>;
+				};
+
 				clkc_AO: clock-controller {
 					compatible = "amlogic,meson-gx-aoclkc";
 					#clock-cells = <1>;
@@ -475,6 +481,21 @@
 				interrupts = <GIC_SPI 218 IRQ_TYPE_EDGE_RISING>;
 				status = "disabled";
 			};
+		};
+
+		vdec: video-decoder@0xd0050000 {
+			compatible = "amlogic,meson8b-vdec";
+			reg = <0x0 0xc8820000 0x0 0x10000
+			       0x0 0xc110a580 0x0 0xe4
+			       0x0 0xc8838000 0x0 0x60>;
+			reg-names = "dos", "esparser", "dmc";
+
+			interrupts = <GIC_SPI 44 IRQ_TYPE_EDGE_RISING
+				      GIC_SPI 32 IRQ_TYPE_EDGE_RISING>;
+			interrupt-names = "vdecirq", "esparserirq";
+
+			amlogic,ao-sysctrl = <&sysctrl_AO>;
+			status = "okay";
 		};
 
 		vpu: vpu@d0100000 {

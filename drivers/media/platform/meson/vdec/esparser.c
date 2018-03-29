@@ -30,10 +30,10 @@
 #define PARSER_VIDEO_END_PTR 0x84
 #define PARSER_ES_CONTROL 0x5c
 #define PARSER_CONFIG 0x14
-	#define PS_CFG_MAX_FETCH_CYCLE_BIT 0
-	#define PS_CFG_STARTCODE_WID_24	10
-	#define PS_CFG_MAX_ES_WR_CYCLE_BIT 12
-	#define PS_CFG_PFIFO_EMPTY_CNT_BIT 16
+	#define PS_CFG_MAX_FETCH_CYCLE_BIT  0
+	#define PS_CFG_STARTCODE_WID_24_BIT 10
+	#define PS_CFG_MAX_ES_WR_CYCLE_BIT  12
+	#define PS_CFG_PFIFO_EMPTY_CNT_BIT  16
 #define PARSER_CONTROL 0x00
 	#define ES_PACK_SIZE_BIT	8
 	#define ES_WRITE		BIT(5)
@@ -117,19 +117,33 @@ unlock:
 	spin_unlock_irqrestore(&core->bufs_spinlock, flags);
 }
 
+/* Add a start code at the end of the buffer
+ * to trigger the esparser interrupt
+ */
+static void esparser_append_start_code(struct vb2_buffer *vb)
+{
+	u8 *vaddr = vb2_plane_vaddr(vb, 0) + vb2_get_plane_payload(vb, 0);
+
+	vaddr[0] = 0x00;
+	vaddr[1] = 0x00;
+	vaddr[2] = 0x01;
+	vaddr[3] = 0xff;
+}
+
 int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 	struct vb2_buffer *vb = &vbuf->vb2_buf;
 	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(&vbuf->vb2_buf, 0);
+	u32 payload_size = vb2_get_plane_payload(vb, 0);
+
+	esparser_append_start_code(vb);
 
 	writel_relaxed(0, core->esparser_base + PFIFO_RD_PTR);
 	writel_relaxed(0, core->esparser_base + PFIFO_WR_PTR);
-	writel_relaxed(ES_WRITE | ES_PARSER_START | ES_SEARCH | ((vb2_get_plane_payload(vb, 0) << ES_PACK_SIZE_BIT)), core->esparser_base + PARSER_CONTROL);
+	writel_relaxed(ES_WRITE | ES_PARSER_START | ES_SEARCH | (payload_size << ES_PACK_SIZE_BIT), core->esparser_base + PARSER_CONTROL);
 
 	writel_relaxed(phy, core->esparser_base + PARSER_FETCH_ADDR);
-	writel_relaxed((7 << FETCH_ENDIAN_BIT) | vb2_get_plane_payload(vb, 0), core->esparser_base + PARSER_FETCH_CMD);
+	writel_relaxed((7 << FETCH_ENDIAN_BIT) | (payload_size + 512), core->esparser_base + PARSER_FETCH_CMD);
 	search_done = 0;
-	writel_relaxed(core->fake_pattern_map, core->esparser_base + PARSER_FETCH_ADDR);
-	writel_relaxed((7 << FETCH_ENDIAN_BIT) | SEARCH_PATTERN_LEN, core->esparser_base + PARSER_FETCH_CMD);
 
 	return wait_event_interruptible_timeout(wq, search_done != 0, HZ/5);
 }
@@ -179,6 +193,7 @@ int esparser_queue(void *data) {
 			printk("ESPARSER input parsing fatal error\n");
 			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
 			writel_relaxed(0, core->esparser_base + PARSER_FETCH_CMD);
+			up(&core->queue_sema);
 		}
 	}
 
@@ -202,7 +217,7 @@ int esparser_power_up(struct vdec_core *core) {
 	writel_relaxed((10 << PS_CFG_PFIFO_EMPTY_CNT_BIT) |
 				   (1  << PS_CFG_MAX_ES_WR_CYCLE_BIT) |
 				   (16 << PS_CFG_MAX_FETCH_CYCLE_BIT) |
-				   (2  << PS_CFG_STARTCODE_WID_24),
+				   (2  << PS_CFG_STARTCODE_WID_24_BIT),
 				   core->esparser_base + PARSER_CONFIG);
 
 	writel_relaxed((ES_SEARCH | ES_PARSER_START), core->esparser_base + PARSER_CONTROL);
@@ -210,6 +225,7 @@ int esparser_power_up(struct vdec_core *core) {
 	/* parser video */
 	writel_relaxed(core->vififo_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
 	writel_relaxed(core->vififo_paddr + core->vififo_size, core->esparser_base + PARSER_VIDEO_END_PTR);
+	writel_relaxed(readl_relaxed(core->dos_base + PARSER_ES_CONTROL) & ~1, core->dos_base + PARSER_ES_CONTROL);
 	writel_relaxed(1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(0, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec

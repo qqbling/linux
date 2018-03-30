@@ -150,50 +150,51 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 
 int esparser_queue(void *data) {
 	struct vdec_core *core = data;
-	struct vb2_v4l2_buffer *vbuf;
+	struct v4l2_m2m_buffer *buf, *n;
 	struct vdec_buffer *new_buf;
 	int ret;
 
 	for (;;) {
-		ret = wait_event_interruptible(core->input_buf_wq, core->input_buf_ready == 1  || kthread_should_stop());
+		ret = wait_event_interruptible(core->input_buf_wq, core->input_bufs_ready  == 1  || kthread_should_stop());
 		if (kthread_should_stop())
 			break;
 
 		if (ret == -EINTR)
 			continue;
 
-		core->input_buf_ready = 0;
+		core->input_bufs_ready = 0;
 
-		vbuf = v4l2_m2m_src_buf_remove(core->m2m_ctx);
-		if (!vbuf)
-			break;
+		v4l2_m2m_for_each_src_buf_safe(core->m2m_ctx, buf, n) {
+			struct vb2_v4l2_buffer *vbuf = &buf->vb;
+			v4l2_m2m_src_buf_remove_by_buf(core->m2m_ctx, vbuf);
 
-		while (down_timeout(&core->queue_sema, HZ) < 0) {
-			if (kthread_should_stop()) {
-				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
-				goto end;
+			while (down_timeout(&core->queue_sema, HZ) < 0) {
+				if (kthread_should_stop()) {
+					v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+					goto end;
+				}
+
+				printk("Timed out waiting for an input slot. Trying again..\n");
 			}
 
-			printk("Timed out waiting for an input slot. Trying again..\n");
-		}
+			ret = esparser_process_buf(core, vbuf);
 
-		ret = esparser_process_buf(core, vbuf);
+			if (ret > 0) {
+				struct vb2_buffer *vb = &vbuf->vb2_buf;
+				new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
+				new_buf->timestamp = vb->timestamp;
+				new_buf->index = -1;
+				add_buffer_to_list(core, new_buf);
 
-		if (ret > 0) {
-			struct vb2_buffer *vb = &vbuf->vb2_buf;
-			new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
-			new_buf->timestamp = vb->timestamp;
-			new_buf->index = -1;
-			add_buffer_to_list(core, new_buf);
-
-			vbuf->flags = 0;
-			vbuf->field = V4L2_FIELD_NONE;
-			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
-		} else if (ret <= 0) {
-			printk("ESPARSER input parsing fatal error\n");
-			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
-			writel_relaxed(0, core->esparser_base + PARSER_FETCH_CMD);
-			up(&core->queue_sema);
+				vbuf->flags = 0;
+				vbuf->field = V4L2_FIELD_NONE;
+				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
+			} else if (ret <= 0) {
+				printk("ESPARSER input parsing fatal error\n");
+				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+				writel_relaxed(0, core->esparser_base + PARSER_FETCH_CMD);
+				up(&core->queue_sema);
+			}
 		}
 	}
 

@@ -110,7 +110,7 @@ struct vdec_core {
 	/* */
 	struct task_struct *esparser_queue_thread;
 	struct semaphore queue_sema;
-	u32 input_buf_ready;
+	u32 input_bufs_ready;
 	wait_queue_head_t input_buf_wq;
 };
 

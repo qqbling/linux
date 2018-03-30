@@ -42,7 +42,7 @@ static int meson_pwrc_vdec_power_off(struct generic_pm_domain *genpd)
 			GEN_PWR_VDEC_1, GEN_PWR_VDEC_1);
 	udelay(20);
 
-	clk_disable_unprepare(pd->vpu_intr_clk);
+	//clk_disable_unprepare(pd->vpu_intr_clk);
 	clk_disable_unprepare(pd->dos_parser_clk);
 	clk_disable_unprepare(pd->vdec_1_clk);
 
@@ -52,7 +52,7 @@ static int meson_pwrc_vdec_power_off(struct generic_pm_domain *genpd)
 static int meson_pwrc_vdec_setup_clk(struct meson_pwrc_vdec *pd) {
 	printk("meson_pwrc_vdec_setup_clk\n");
 	clk_prepare_enable(pd->dos_parser_clk);
-	clk_prepare_enable(pd->vpu_intr_clk);
+	//clk_prepare_enable(pd->vpu_intr_clk);
 	clk_prepare_enable(pd->vdec_1_clk);
 
 	return 0;

@@ -32,62 +32,56 @@ struct vdec_buffer {
 	u64 timestamp;
 };
 
-struct vdec_format {
-	u32 pixfmt;
-	unsigned int num_planes;
-	u32 type;
-};
+struct vdec_session;
 
 struct vdec_core {
 	void __iomem *dos_base;
 	void __iomem *esparser_base;
 	void __iomem *dmc_base;
 	struct regmap *regmap_ao;
-	int irq;
+
 	struct device *dev;
 	struct device *dev_dec;
 
 	struct video_device *vdev_dec;
 	struct v4l2_device v4l2_dev;
+	
+	struct vdec_session *cur_sess;
+};
+
+/* Describes one of the VDECS (VDEC_1, VDEC_2, VDEC_HCODEC, VDEC_HEVC) */
+struct vdec_ops {
+	int (*start)(struct vdec_session *sess);
+	int (*stop)(struct vdec_session *sess);
+};
+
+/* Describes one of the compression standard supported (H.264, HEVC..) */
+struct vdec_codec_ops {
+	int (*start)(struct vdec_session *sess);
+	int (*stop)(struct vdec_session *sess);
+	int (*load_extended_firmware)(struct vdec_session *sess, const u8 *data, u32 len);
+	irqreturn_t (*isr)(struct vdec_session *sess);
+};
+
+/* Describes one of the format that can be decoded/encoded */
+struct vdec_format {
+	u32 pixfmt;
+	unsigned int num_planes;
+	u32 type;
+	struct vdec_ops *vdec_ops;
+	struct vdec_codec_ops *codec_ops;
+	char *firmware_path;
+};
+
+struct vdec_session {
+	struct vdec_core *core;
+	
+	struct mutex lock;
+	
 	struct v4l2_fh fh;
 	struct v4l2_m2m_dev *m2m_dev;
 	struct v4l2_m2m_ctx *m2m_ctx;
-
-	struct mutex lock;
-
-	/* Big contiguous area for the Decoded Picture Buffer */
-	/*void *dpb_vaddr;
-	dma_addr_t dpb_paddr;
-	u32 dpb_size;*/
-
-	/* Big contiguous area for the VIFIFO */
-	void *vififo_vaddr;
-	dma_addr_t vififo_paddr;
-	u32 vififo_size;
-
-	/* Fake Start Code for the ESPARSER to trigger the IRQs */
-	unsigned char *fake_pattern;
-	dma_addr_t     fake_pattern_map;
-
-	/* H.264 decoder requires an extended firmware loaded in contiguous RAM */
-	void      *vh264_ext_fw_vaddr;
-	dma_addr_t vh264_ext_fw_paddr;
-
-	/* The decoder requires a "post canvas", don't really know what it's for */
-	void      *dummy_post_canvas_vaddr;
-	dma_addr_t dummy_post_canvas_paddr;
-
-	/* Buffer for the H.264 decoder. Unk (1.24 MiB), References MV (1 MiB), Unk (3 MiB) */
-	void      *vh264_mem_vaddr;
-	dma_addr_t vh264_mem_paddr;
-	u32	   vh264_mem_size;
-
-	/* Whether capture/output streaming are on */
-	unsigned int streamon_cap, streamon_out;
 	
-	/* Capture sequence counter */
-	unsigned int sequence_cap;
-
 	const struct vdec_format *fmt_out;
 	const struct vdec_format *fmt_cap;
 	u32 width;
@@ -97,21 +91,34 @@ struct vdec_core {
 	u8 quantization;
 	u8 xfer_func;
 
-	/* Buffers queued into the HW */
-	struct list_head bufs;
-	spinlock_t bufs_spinlock;
-	//struct work_struct mark_buffers_done_work;
-	struct task_struct *buffers_done_thread;
+	/* Whether capture/output streaming are on */
+	unsigned int streamon_cap, streamon_out;
+	
+	/* Capture sequence counter */
+	unsigned int sequence_cap;
 
-	/* Buffers that need to be recycled by the HW */
-	struct list_head bufs_recycle;
-	struct mutex bufs_recycle_lock;
-
-	/* */
+	/* ESPARSER Input buffer management */
 	struct task_struct *esparser_queue_thread;
 	struct semaphore queue_sema;
 	u32 input_bufs_ready;
 	wait_queue_head_t input_buf_wq;
+
+	/* Big contiguous area for the VIFIFO */
+	void *vififo_vaddr;
+	dma_addr_t vififo_paddr;
+	u32 vififo_size;
+
+	/* Buffers that need to be recycled by the HW */
+	struct list_head bufs_recycle;
+	struct mutex bufs_recycle_lock;
+	
+	/* Buffers queued into the HW */
+	struct list_head bufs;
+	spinlock_t bufs_spinlock;
+	
+	void *priv;
 };
+
+u32 vdec_get_output_size(struct vdec_session *sess);
 
 #endif

@@ -96,15 +96,15 @@ static irqreturn_t esparser_isr(int irq, void *dev) {
  * Userspace is very likely to feed us packets with timestamps not in chronological order
  * because of B-frames. Rearrange them here.
  */
-static void add_buffer_to_list(struct vdec_core *core, struct vdec_buffer *new_buf) {
+static void add_buffer_to_list(struct vdec_session *sess, struct vdec_buffer *new_buf) {
 	struct vdec_buffer *tmp;
 	unsigned long flags;
 
-	spin_lock_irqsave(&core->bufs_spinlock, flags);
-	if (list_empty(&core->bufs))
+	spin_lock_irqsave(&sess->bufs_spinlock, flags);
+	if (list_empty(&sess->bufs))
 		goto add_core;
 
-	list_for_each_entry(tmp, &core->bufs, list) {
+	list_for_each_entry(tmp, &sess->bufs, list) {
 		if (new_buf->timestamp < tmp->timestamp) {
 			list_add_tail(&new_buf->list, &tmp->list);
 			goto unlock;
@@ -112,9 +112,9 @@ static void add_buffer_to_list(struct vdec_core *core, struct vdec_buffer *new_b
 	}
 
 add_core:
-	list_add_tail(&new_buf->list, &core->bufs);
+	list_add_tail(&new_buf->list, &sess->bufs);
 unlock:
-	spin_unlock_irqrestore(&core->bufs_spinlock, flags);
+	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 }
 
 /* Add a start code at the end of the buffer
@@ -149,26 +149,27 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 }
 
 int esparser_queue(void *data) {
-	struct vdec_core *core = data;
+	struct vdec_session *sess = data;
+	struct vdec_core *core = sess->core;
 	struct v4l2_m2m_buffer *buf, *n;
 	struct vdec_buffer *new_buf;
 	int ret;
 
 	for (;;) {
-		ret = wait_event_interruptible(core->input_buf_wq, core->input_bufs_ready  == 1  || kthread_should_stop());
+		ret = wait_event_interruptible(sess->input_buf_wq, sess->input_bufs_ready  == 1  || kthread_should_stop());
 		if (kthread_should_stop())
 			break;
 
 		if (ret == -EINTR)
 			continue;
 
-		core->input_bufs_ready = 0;
+		sess->input_bufs_ready = 0;
 
-		v4l2_m2m_for_each_src_buf_safe(core->m2m_ctx, buf, n) {
+		v4l2_m2m_for_each_src_buf_safe(sess->m2m_ctx, buf, n) {
 			struct vb2_v4l2_buffer *vbuf = &buf->vb;
-			v4l2_m2m_src_buf_remove_by_buf(core->m2m_ctx, vbuf);
+			v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);
 
-			while (down_timeout(&core->queue_sema, HZ) < 0) {
+			while (down_timeout(&sess->queue_sema, HZ) < 0) {
 				if (kthread_should_stop()) {
 					v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
 					goto end;
@@ -184,7 +185,7 @@ int esparser_queue(void *data) {
 				new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
 				new_buf->timestamp = vb->timestamp;
 				new_buf->index = -1;
-				add_buffer_to_list(core, new_buf);
+				add_buffer_to_list(sess, new_buf);
 
 				vbuf->flags = 0;
 				vbuf->field = V4L2_FIELD_NONE;
@@ -193,7 +194,7 @@ int esparser_queue(void *data) {
 				printk("ESPARSER input parsing fatal error\n");
 				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
 				writel_relaxed(0, core->esparser_base + PARSER_FETCH_CMD);
-				up(&core->queue_sema);
+				up(&sess->queue_sema);
 			}
 		}
 	}
@@ -202,7 +203,8 @@ end:
 	return 0;
 }
 
-int esparser_power_up(struct vdec_core *core) {
+int esparser_power_up(struct vdec_session *sess) {
+	struct vdec_core *core = sess->core;
 	// WRITE_MPEG_REG(FEC_INPUT_CONTROL, 0);
 	writel_relaxed((10 << PS_CFG_PFIFO_EMPTY_CNT_BIT) |
 				(1  << PS_CFG_MAX_ES_WR_CYCLE_BIT) |
@@ -224,8 +226,8 @@ int esparser_power_up(struct vdec_core *core) {
 	writel_relaxed((ES_SEARCH | ES_PARSER_START), core->esparser_base + PARSER_CONTROL);
 
 	/* parser video */
-	writel_relaxed(core->vififo_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
-	writel_relaxed(core->vififo_paddr + core->vififo_size, core->esparser_base + PARSER_VIDEO_END_PTR);
+	writel_relaxed(sess->vififo_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
+	writel_relaxed(sess->vififo_paddr + sess->vififo_size, core->esparser_base + PARSER_VIDEO_END_PTR);
 	writel_relaxed(readl_relaxed(core->dos_base + PARSER_ES_CONTROL) & ~1, core->dos_base + PARSER_ES_CONTROL);
 	writel_relaxed(1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
@@ -237,21 +239,22 @@ int esparser_power_up(struct vdec_core *core) {
 	return 0;
 }
 
-/* Is this actually necessary? */
-int stbuf_power_up(struct vdec_core *core) {
+int stbuf_power_up(struct vdec_session *sess) {
+	struct vdec_core *core = sess->core;
+
 	writel_relaxed(0, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 	writel_relaxed(0, core->dos_base + VLD_MEM_VIFIFO_WRAP_COUNT);
 	writel_relaxed(1 << 4, core->dos_base + POWER_CTL_VLD);
 
-	writel_relaxed(core->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_START_PTR);
-	writel_relaxed(core->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_CURR_PTR);
-	writel_relaxed(core->vififo_paddr + core->vififo_size - 8, core->dos_base + VLD_MEM_VIFIFO_END_PTR);
+	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_START_PTR);
+	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_CURR_PTR);
+	writel_relaxed(sess->vififo_paddr + sess->vififo_size - 8, core->dos_base + VLD_MEM_VIFIFO_END_PTR);
 
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) |  1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) & ~1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 
 	writel_relaxed(MEM_BUFCTRL_MANUAL, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-	writel_relaxed(core->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_WP);
+	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_WP);
 
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) |  1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
@@ -283,13 +286,13 @@ int esparser_init(struct platform_device *pdev, struct vdec_core *core) {
 	}
 
 	/* Generate a fake start code to trigger the esparser IRQ later on */
-	core->fake_pattern = (unsigned char *)kcalloc(1, SEARCH_PATTERN_LEN, GFP_KERNEL);
+	/*core->fake_pattern = (unsigned char *)kcalloc(1, SEARCH_PATTERN_LEN, GFP_KERNEL);
 	core->fake_pattern[0] = 0x00;
 	core->fake_pattern[1] = 0x00;
 	core->fake_pattern[2] = 0x01;
 	core->fake_pattern[3] = 0xff;
 	core->fake_pattern_map = dma_map_single(NULL, core->fake_pattern,
-						SEARCH_PATTERN_LEN, DMA_TO_DEVICE);
+						SEARCH_PATTERN_LEN, DMA_TO_DEVICE);*/
 
 	return 0;
 }

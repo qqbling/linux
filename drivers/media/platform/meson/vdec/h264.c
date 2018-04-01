@@ -285,9 +285,9 @@ static void vdec_h264_set_param(struct vdec_session *sess) {
 	u32 max_reference_size;
 	u32 parsed_info, mb_width, mb_height, mb_total;
 	u32 mb_mv_byte;
-	u32 addr;
 	u32 actual_dpb_size = v4l2_m2m_num_dst_bufs_ready(sess->m2m_ctx);
 	u32 max_dpb_size = 4;
+	u32 ref_buf_size;
 	struct v4l2_m2m_buffer *buf;
 	struct vdec_core *core = sess->core;
 	struct vdec_h264 *h264 = sess->priv;
@@ -342,6 +342,8 @@ static void vdec_h264_set_param(struct vdec_session *sess) {
 	if (max_reference_size >= max_dpb_size) {
 		max_dpb_size = max_reference_size;
 		max_reference_size++;
+	} else {
+		max_reference_size = max_dpb_size + 1;
 	}
 
 	/* I don't really know the purpose of this post canvas.
@@ -358,14 +360,15 @@ static void vdec_h264_set_param(struct vdec_session *sess) {
 	printk("Setting POST CANVAS to %08X\n", (0x1 << 16) | (0x1 << 8) | 0x0);
 	writel_relaxed((0x1 << 16) | (0x1 << 8) | 0x0, core->dos_base + AV_SCRATCH_3);
 
+	ref_buf_size = mb_total * mb_mv_byte * max_reference_size;
+	h264->ref_vaddr = dma_alloc_coherent(core->dev, ref_buf_size, &h264->ref_paddr, GFP_ATOMIC);
+
 	/* Address to store the references' MVs ? */
-	addr = h264->ref_paddr;
-	writel_relaxed(addr, core->dos_base + AV_SCRATCH_1);
+	writel_relaxed(h264->ref_paddr, core->dos_base + AV_SCRATCH_1);
 	printk("Max references buffer size: %d\n", mb_total * mb_mv_byte * max_reference_size);
 
-	/* End of ref MV or start of something else ? */
-	addr += mb_total * mb_mv_byte * max_reference_size;
-	writel_relaxed(addr, core->dos_base + AV_SCRATCH_4);
+	/* End of ref MV */
+	writel_relaxed(h264->ref_paddr + ref_buf_size, core->dos_base + AV_SCRATCH_4);
 
 	writel_relaxed((max_reference_size << 24) | (actual_dpb_size << 16) | (max_dpb_size << 8), core->dos_base + AV_SCRATCH_0);
 }

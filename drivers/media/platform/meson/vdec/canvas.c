@@ -60,7 +60,7 @@ void vdec_canvas_setup(void __iomem *dmc_base,
 						CANVAS_WIDTH_HBIT) |
 		(height << CANVAS_HEIGHT_BIT) |
 		(wrap << 22) |
-		(blkmode << CANVAS_BLKMODE_BIT), dmc_base + DMC_CAV_LUT_DATAH);
+		(blkmode << CANVAS_BLKMODE_BIT) | (7 << 26), dmc_base + DMC_CAV_LUT_DATAH);
 
 	writel_relaxed(CANVAS_LUT_WR_EN | canvas_index, dmc_base + DMC_CAV_LUT_ADDR);
 

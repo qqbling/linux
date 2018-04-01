@@ -336,7 +336,7 @@ vdec_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 
 static const struct vdec_format vdec_formats[] = {
 	{
-		.pixfmt = V4L2_PIX_FMT_NV21M,
+		.pixfmt = V4L2_PIX_FMT_NV12M,
 		.num_planes = 2,
 		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
 	}, {
@@ -410,7 +410,7 @@ vdec_try_fmt_common(struct v4l2_format *f)
 	fmt = find_format(pixmp->pixelformat, f->type);
 	if (!fmt) {
 		if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
-			pixmp->pixelformat = V4L2_PIX_FMT_NV21M;
+			pixmp->pixelformat = V4L2_PIX_FMT_NV12M;
 		else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 			pixmp->pixelformat = V4L2_PIX_FMT_H264;
 		else

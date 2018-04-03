@@ -787,9 +787,11 @@
 };
 
 &pwrc_vdec {
-	clocks = <&clkc CLKID_VPU_INTR>, <&clkc CLKID_DOS_PARSER>, <&clkc CLKID_VDEC_1>;
-	clock-names = "vpu_intr", "dos_parser", "vdec_1";
+	clocks = <&clkc CLKID_VPU_INTR>, <&clkc CLKID_DOS_PARSER>, <&clkc CLKID_VDEC_1>, <&clkc CLKID_VDEC_HEVC>;
+	clock-names = "vpu_intr", "dos_parser", "vdec_1", "vdec_hevc";
 
-	assigned-clocks = <&clkc CLKID_VDEC_1>;
-	assigned-clock-rates = <648000000>;
+	assigned-clocks = <&clkc CLKID_VDEC_1>,
+			  <&clkc CLKID_VDEC_HEVC>;
+	assigned-clock-rates = <648000000>,
+			       <648000000>;
 };

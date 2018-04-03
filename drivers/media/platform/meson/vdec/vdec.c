@@ -11,82 +11,14 @@
 #include <media/v4l2-mem2mem.h>
 #include <media/v4l2-dev.h>
 #include <media/videobuf2-dma-contig.h>
-#include <linux/firmware.h>
 
 #include "vdec.h"
 #include "esparser.h"
 #include "canvas.h"
 #include "h264.h"
 #include "vdec_1.h"
-
-#define MC_SIZE			(4096 * 4)
-
-/* DOS registers */
-#define MPSR 0x0c04
-#define CPSR 0x0c84
-
-#define IMEM_DMA_CTRL  0x0d00
-#define IMEM_DMA_ADR   0x0d04
-#define IMEM_DMA_COUNT 0x0d08
-
-#define MDEC_PIC_DC_CTRL   0x2638
-
-/**
- * Load a VDEC firmware, each codec having its own firmware.
- * Some codecs also require additional firmware parts to be loaded after this
- */
-static int vdec_load_firmware(struct vdec_session *sess, const char* fwname)
-{
-	const struct firmware *fw;
-	struct vdec_core *core = sess->core;
-	struct device *dev = core->dev_dec;
-	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
-	static void *mc_addr;
-	static dma_addr_t mc_addr_map;
-	int ret;
-	u32 i = 10000;
-
-	ret = request_firmware(&fw, fwname, dev);
-	if (ret < 0)  {
-		dev_err(dev, "Unable to request firmware %s\n", fwname);
-		return -EINVAL;
-	}
-
-	mc_addr = kmalloc(MC_SIZE, GFP_KERNEL);
-	if (!mc_addr)
-		return -ENOMEM;
-
-	memcpy(mc_addr, fw->data, MC_SIZE);
-	mc_addr_map = dma_map_single(core->dev, mc_addr, MC_SIZE, DMA_TO_DEVICE);
-	if (!mc_addr_map) {
-		dev_err(dev, "Couldn't MAP DMA addr\n");
-		return -EINVAL;
-	}
-
-	writel_relaxed(0, core->dos_base + MPSR);
-	writel_relaxed(0, core->dos_base + CPSR);
-
-	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) & ~(1<<31), core->dos_base + MDEC_PIC_DC_CTRL);
-	writel_relaxed(mc_addr_map, core->dos_base + IMEM_DMA_ADR);
-	writel_relaxed(MC_SIZE, core->dos_base + IMEM_DMA_COUNT);
-	writel_relaxed((0x8000 | (7 << 16)), core->dos_base + IMEM_DMA_CTRL);
-
-	while (--i && readl(core->dos_base + IMEM_DMA_CTRL) & 0x8000) { }
-
-	if (i == 0) {
-		printk("Firmware load fail (DMA hang?)\n");
-		ret = -EINVAL;
-	} else
-		printk("Firmware load success\n");
-
-	if (codec_ops->load_extended_firmware)
-		codec_ops->load_extended_firmware(sess, fw->data + MC_SIZE, fw->size - MC_SIZE);
-
-	dma_unmap_single(core->dev, mc_addr_map, MC_SIZE, DMA_TO_DEVICE);
-	kfree(mc_addr);
-	release_firmware(fw);
-	return ret;
-}
+#include "hevc.h"
+#include "vdec_hevc.h"
 
 static void vdec_abort(struct vdec_session *sess) {
 	printk("Aborting decoding session!\n");
@@ -104,25 +36,13 @@ u32 vdec_get_output_size(struct vdec_session *sess) {
 
 static int vdec_poweron(struct vdec_session *sess) {
 	int ret;
-	struct vdec_core *core = sess->core;
 	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
-	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
 
 	printk("vdec_poweron\n");
 
-	vdec_ops->start(sess);
-
-	stbuf_power_up(sess);
-
-	/*TODO: power up the decoder related to the input PIXFMT */
-	ret = vdec_load_firmware(sess, sess->fmt_out->firmware_path);// "");
+	ret = vdec_ops->start(sess);
 	if (ret)
 		return ret;
-
-	codec_ops->start(sess);
-
-	/* Enable firmware processor */
-	writel_relaxed(1, core->dos_base + MPSR);
 
 	esparser_power_up(sess);
 
@@ -130,16 +50,12 @@ static int vdec_poweron(struct vdec_session *sess) {
 }
 
 static void vdec_poweroff(struct vdec_session *sess) {
-	struct vdec_core *core = sess->core;
 	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
 
 	kthread_stop(sess->esparser_queue_thread);
+
 	codec_ops->stop(sess);
-
-	writel_relaxed(0, core->dos_base + MPSR);
-	writel_relaxed(0, core->dos_base + CPSR);
-
 	vdec_ops->stop(sess);
 }
 
@@ -346,14 +262,14 @@ static const struct vdec_format vdec_formats[] = {
 		.vdec_ops = &vdec_1_ops,
 		.codec_ops = &codec_h264_ops,
 		.firmware_path = "meson/gxl/gxtvbb_vh264_mc",
-	}, /*{
+	}, {
 		.pixfmt = V4L2_PIX_FMT_HEVC,
 		.num_planes = 1,
 		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
 		.vdec_ops = &vdec_hevc_ops,
 		.codec_ops = &codec_hevc_ops,
 		.firmware_path = "meson/gxl/vh265_mc",
-	},*/
+	},
 };
 
 static const struct vdec_format * find_format(u32 pixfmt, u32 type)
@@ -420,8 +336,8 @@ vdec_try_fmt_common(struct v4l2_format *f)
 		pixmp->height = 720;
 	}
 
-	pixmp->width  = clamp(pixmp->width,  (u32)256, (u32)1920);
-	pixmp->height = clamp(pixmp->height, (u32)144, (u32)1080);
+	pixmp->width  = clamp(pixmp->width,  (u32)256, (u32)3840);
+	pixmp->height = clamp(pixmp->height, (u32)144, (u32)2160);
 
 	if (pixmp->field == V4L2_FIELD_ANY)
 		pixmp->field = V4L2_FIELD_NONE;
@@ -557,6 +473,36 @@ static int vdec_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 	return 0;
 }
 
+static int vdec_enum_framesizes(struct file *file, void *fh,
+				struct v4l2_frmsizeenum *fsize)
+{
+	const struct vdec_format *fmt;
+
+	fmt = find_format(fsize->pixel_format,
+			  V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
+	if (!fmt) {
+		fmt = find_format(fsize->pixel_format,
+				  V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+		if (!fmt)
+			return -EINVAL;
+	}
+
+	if (fsize->index)
+		return -EINVAL;
+
+	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+
+	/* TODO: Store these constants in vdec_format */
+	fsize->stepwise.min_width = 256;
+	fsize->stepwise.max_width = 3840;
+	fsize->stepwise.step_width = 1;
+	fsize->stepwise.min_height = 144;
+	fsize->stepwise.max_height = 2160;
+	fsize->stepwise.step_height = 1;
+
+	return 0;
+}
+
 static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_querycap = vdec_querycap,
 	.vidioc_enum_fmt_vid_cap_mplane = vdec_enum_fmt,
@@ -578,7 +524,7 @@ static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_streamon = v4l2_m2m_ioctl_streamon,
 	.vidioc_streamoff = v4l2_m2m_ioctl_streamoff,
 	//.vidioc_s_parm = vdec_s_parm,
-	//.vidioc_enum_framesizes = vdec_enum_framesizes,
+	.vidioc_enum_framesizes = vdec_enum_framesizes,
 	//.vidioc_subscribe_event = vdec_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 	//.vidioc_try_decoder_cmd = vdec_try_decoder_cmd,

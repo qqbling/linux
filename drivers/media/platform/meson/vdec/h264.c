@@ -39,6 +39,7 @@
 #define AV_SCRATCH_D  0x2734
 #define AV_SCRATCH_F  0x273c
 #define AV_SCRATCH_G  0x2740
+#define AV_SCRATCH_H  0x2744
 
 #define POWER_CTL_VLD 0x3020
 
@@ -63,7 +64,7 @@ struct vdec_h264 {
 	void      *ref_vaddr;
 	dma_addr_t ref_paddr;
 	u32	   ref_size;
-	
+
 	/* Housekeeping thread for marking buffers to DONE
 	 * and recycling them into the hardware
 	 */
@@ -102,9 +103,7 @@ static int vdec_h264_buffers_thread(void *data)
 			printk("Buffer %d done\n", tmp->index);
 
 			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
-
 			list_del(&tmp->list);
-
 			kfree(tmp);
 		}
 		spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
@@ -147,7 +146,7 @@ static int vdec_h264_start(struct vdec_session *sess) {
 	printk("vdec_h264_start\n");
 	
 	/* Allocate a "post canvas", purpose unknown */
-	h264->post_canvas_vaddr = dma_alloc_coherent(core->dev_dec, SIZE_POST_CNV, &h264->post_canvas_paddr, GFP_KERNEL);
+	h264->post_canvas_vaddr = dma_alloc_coherent(core->dev, SIZE_POST_CNV, &h264->post_canvas_paddr, GFP_KERNEL);
 	if (!h264->post_canvas_paddr) {
 		printk("Failed to request post canvas\n");
 		return -ENOMEM;
@@ -155,7 +154,7 @@ static int vdec_h264_start(struct vdec_session *sess) {
 	printk("Allocated post canvas: %08X - %08X\n", h264->post_canvas_paddr, h264->post_canvas_paddr + SIZE_POST_CNV);
 	
 	/* Allocate some memory for the H.264 decoder's state */
-	h264->workspace_vaddr = dma_alloc_coherent(core->dev_dec, SIZE_WORKSPACE, &h264->workspace_paddr, GFP_KERNEL);
+	h264->workspace_vaddr = dma_alloc_coherent(core->dev, SIZE_WORKSPACE, &h264->workspace_paddr, GFP_KERNEL);
 	if (!h264->workspace_vaddr) {
 		printk("Failed to request H.264 Workspace\n");
 		ret = -ENOMEM;
@@ -317,7 +316,7 @@ static void vdec_h264_set_param(struct vdec_session *sess) {
 	mb_height = (mb_height + 3) & 0xfffffffc;
 	mb_total = mb_width * mb_height;
 
-	/* Setup NV21 canvases for Decoded Picture Buffer (dpb)
+	/* Setup NV12 canvases for Decoded Picture Buffer (dpb)
 	 * Map them to the user buffers' planes
 	 */
 	printk("Configuring %d canvases..\n", actual_dpb_size*2);
@@ -339,12 +338,10 @@ static void vdec_h264_set_param(struct vdec_session *sess) {
 				(cnv_y_idx), core->dos_base + ANC0_CANVAS_ADDR + buf_idx*4);
 	}
 
-	if (max_reference_size >= max_dpb_size) {
+	if (max_reference_size >= max_dpb_size)
 		max_dpb_size = max_reference_size;
-		max_reference_size++;
-	} else {
-		max_reference_size = max_dpb_size + 1;
-	}
+
+	max_reference_size++;
 
 	/* I don't really know the purpose of this post canvas.
 	 * It seems required with the write to AV_SCRATCH_3 though..
@@ -393,6 +390,7 @@ static irqreturn_t vdec_h264_isr(struct vdec_session *sess)
 	unsigned int cpu_cmd;
 	unsigned int buffer_index;
 	int i;
+	u32 slice_type;
 	struct vdec_core *core = sess->core;
 
 	writel_relaxed(1, core->dos_base + ASSIST_MBOX1_CLR_REG);
@@ -406,18 +404,21 @@ static irqreturn_t vdec_h264_isr(struct vdec_session *sess)
 		int error_count, error, num_frame, status, eos = 0;
 		error_count = readl_relaxed(core->dos_base + AV_SCRATCH_D);
 		num_frame = (cpu_cmd >> 8) & 0xff;
-		if (error_count) {
+		if (error_count)
 			printk("decoder error(s) happened, count %d\n", error_count);
-		}
 
 		//printk("Decoded %d frames\n", num_frame);
 
 		for (i = 0 ; (i < num_frame) && (!eos) ; i++) {
-
+			slice_type = (readl_relaxed(core->dos_base + AV_SCRATCH_H) >> (i * 4)) & 0xf;
 			status = readl_relaxed(core->dos_base + AV_SCRATCH_1 + i*4);
 			buffer_index = status & 0x1f;
 			error = status & 0x200;
 
+			/* A buffer decode error means it was decoded,
+			 * but part of the picture will have artifacts.
+			 * Typical reason is a temporarily corrupted bitstream
+			 */
 			if (error) {
 				printk("Buffer %d decode error: %08X\n", buffer_index, error);
 			} else {

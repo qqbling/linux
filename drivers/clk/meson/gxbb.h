@@ -205,8 +205,9 @@
 #define CLKID_FCLK_DIV5_DIV	  149
 #define CLKID_FCLK_DIV7_DIV	  150
 #define CLKID_VDEC_1_DIV	  152
+#define CLKID_VDEC_HEVC_DIV	  155
 
-#define NR_CLKS			  154
+#define NR_CLKS			  157
 
 /* include the CLKIDs that have been made part of the DT binding */
 #include <dt-bindings/clock/gxbb-clkc.h>

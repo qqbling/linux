@@ -49,24 +49,9 @@
 #define PARSER_FETCH_CMD  0x8
 	#define FETCH_ENDIAN_BIT	  27
 
-/* DOS REGS */
-#define DOS_GEN_CTRL0 0xfc08
-
-/* Stream Buffer (stbuf) regs (DOS) */
-#define POWER_CTL_VLD 0x3020
-#define VLD_MEM_VIFIFO_START_PTR 0x3100
-#define VLD_MEM_VIFIFO_CURR_PTR 0x3104
-#define VLD_MEM_VIFIFO_END_PTR 0x3108
-#define VLD_MEM_VIFIFO_CONTROL 0x3110
-	#define MEM_FIFO_CNT_BIT	16
-	#define MEM_FILL_ON_LEVEL	BIT(10)
-	#define MEM_CTRL_EMPTY_EN	BIT(2)
-	#define MEM_CTRL_FILL_EN	BIT(1)
-#define VLD_MEM_VIFIFO_WP 0x3114
-#define VLD_MEM_VIFIFO_RP 0x3118
+/* STBUF regs */
 #define VLD_MEM_VIFIFO_BUF_CNTL 0x3120
 	#define MEM_BUFCTRL_MANUAL	BIT(1)
-#define VLD_MEM_VIFIFO_WRAP_COUNT 0x3144
 
 #define SEARCH_PATTERN_LEN   512
 
@@ -205,6 +190,7 @@ end:
 
 int esparser_power_up(struct vdec_session *sess) {
 	struct vdec_core *core = sess->core;
+
 	// WRITE_MPEG_REG(FEC_INPUT_CONTROL, 0);
 	writel_relaxed((10 << PS_CFG_PFIFO_EMPTY_CNT_BIT) |
 				(1  << PS_CFG_MAX_ES_WR_CYCLE_BIT) |
@@ -228,38 +214,10 @@ int esparser_power_up(struct vdec_session *sess) {
 	/* parser video */
 	writel_relaxed(sess->vififo_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
 	writel_relaxed(sess->vififo_paddr + sess->vififo_size, core->esparser_base + PARSER_VIDEO_END_PTR);
-	writel_relaxed(readl_relaxed(core->dos_base + PARSER_ES_CONTROL) & ~1, core->dos_base + PARSER_ES_CONTROL);
-	writel_relaxed(1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-	writel_relaxed(0, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec
+	writel_relaxed(readl_relaxed(core->esparser_base + PARSER_ES_CONTROL) & ~1, core->esparser_base + PARSER_ES_CONTROL);
 	
 	writel_relaxed(0xffff, core->esparser_base + PARSER_INT_STATUS);
 	writel_relaxed(1 << PARSER_INT_HOST_EN_BIT, core->esparser_base + PARSER_INT_ENABLE);
-
-	return 0;
-}
-
-int stbuf_power_up(struct vdec_session *sess) {
-	struct vdec_core *core = sess->core;
-
-	writel_relaxed(0, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
-	writel_relaxed(0, core->dos_base + VLD_MEM_VIFIFO_WRAP_COUNT);
-	writel_relaxed(1 << 4, core->dos_base + POWER_CTL_VLD);
-
-	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_START_PTR);
-	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_CURR_PTR);
-	writel_relaxed(sess->vififo_paddr + sess->vififo_size - 8, core->dos_base + VLD_MEM_VIFIFO_END_PTR);
-
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) |  1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) & ~1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
-
-	writel_relaxed(MEM_BUFCTRL_MANUAL, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_WP);
-
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) |  1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) | (0x11 << MEM_FIFO_CNT_BIT) | MEM_FILL_ON_LEVEL | MEM_CTRL_FILL_EN | MEM_CTRL_EMPTY_EN, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
 
 	return 0;
 }

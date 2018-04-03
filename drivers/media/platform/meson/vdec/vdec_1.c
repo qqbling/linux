@@ -1,3 +1,5 @@
+#include <linux/firmware.h>
+
 #include "vdec_1.h"
 
 /* AO Registers */
@@ -7,7 +9,12 @@
 #define ASSIST_MBOX1_CLR_REG 0x01d4
 #define ASSIST_MBOX1_MASK    0x01d8
 
+#define MPSR 0x0c04
+#define CPSR 0x0c84
+
 #define IMEM_DMA_CTRL  0x0d00
+#define IMEM_DMA_ADR   0x0d04
+#define IMEM_DMA_COUNT 0x0d08
 #define LMEM_DMA_CTRL  0x0d40
 
 #define MC_STATUS0  0x2424
@@ -24,20 +31,120 @@
 
 #define DOS_SW_RESET0             0xfc00
 #define DOS_GCLK_EN0              0xfc04
+#define DOS_GEN_CTRL0             0xfc08
 #define DOS_MEM_PD_VDEC           0xfcc0
 #define DOS_VDEC_MCRCC_STALL_CTRL 0xfd00
+
+/* Stream Buffer (stbuf) regs (DOS) */
+#define POWER_CTL_VLD 0x3020
+#define VLD_MEM_VIFIFO_START_PTR 0x3100
+#define VLD_MEM_VIFIFO_CURR_PTR 0x3104
+#define VLD_MEM_VIFIFO_END_PTR 0x3108
+#define VLD_MEM_VIFIFO_CONTROL 0x3110
+	#define MEM_FIFO_CNT_BIT	16
+	#define MEM_FILL_ON_LEVEL	BIT(10)
+	#define MEM_CTRL_EMPTY_EN	BIT(2)
+	#define MEM_CTRL_FILL_EN	BIT(1)
+#define VLD_MEM_VIFIFO_WP 0x3114
+#define VLD_MEM_VIFIFO_RP 0x3118
+#define VLD_MEM_VIFIFO_BUF_CNTL 0x3120
+	#define MEM_BUFCTRL_MANUAL	BIT(1)
+#define VLD_MEM_VIFIFO_WRAP_COUNT 0x3144
+
+#define MC_SIZE			(4096 * 4)
+
+static int vdec_1_load_firmware(struct vdec_session *sess, const char* fwname)
+{
+	const struct firmware *fw;
+	struct vdec_core *core = sess->core;
+	struct device *dev = core->dev_dec;
+	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
+	static void *mc_addr;
+	static dma_addr_t mc_addr_map;
+	int ret;
+	u32 i = 1000;
+
+	ret = request_firmware(&fw, fwname, dev);
+	if (ret < 0)  {
+		dev_err(dev, "Unable to request firmware %s\n", fwname);
+		return -EINVAL;
+	}
+
+	mc_addr = kmalloc(MC_SIZE, GFP_KERNEL);
+	if (!mc_addr)
+		return -ENOMEM;
+
+	memcpy(mc_addr, fw->data, MC_SIZE);
+	mc_addr_map = dma_map_single(core->dev, mc_addr, MC_SIZE, DMA_TO_DEVICE);
+	if (!mc_addr_map) {
+		dev_err(dev, "Couldn't MAP DMA addr\n");
+		return -EINVAL;
+	}
+
+	writel_relaxed(0, core->dos_base + MPSR);
+	writel_relaxed(0, core->dos_base + CPSR);
+
+	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) & ~(1<<31), core->dos_base + MDEC_PIC_DC_CTRL);
+
+	writel_relaxed(mc_addr_map, core->dos_base + IMEM_DMA_ADR);
+	writel_relaxed(MC_SIZE / 4, core->dos_base + IMEM_DMA_COUNT);
+	writel_relaxed((0x8000 | (7 << 16)), core->dos_base + IMEM_DMA_CTRL);
+
+	while (--i && readl(core->dos_base + IMEM_DMA_CTRL) & 0x8000) { }
+
+	if (i == 0) {
+		printk("Firmware load fail (DMA hang?)\n");
+		ret = -EINVAL;
+	} else
+		printk("Firmware load success\n");
+
+	if (codec_ops->load_extended_firmware)
+		codec_ops->load_extended_firmware(sess, fw->data + MC_SIZE, fw->size - MC_SIZE);
+
+	dma_unmap_single(core->dev, mc_addr_map, MC_SIZE, DMA_TO_DEVICE);
+	kfree(mc_addr);
+	release_firmware(fw);
+	return ret;
+}
+
+int vdec_1_stbuf_power_up(struct vdec_session *sess) {
+	struct vdec_core *core = sess->core;
+
+	writel_relaxed(0, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
+	writel_relaxed(0, core->dos_base + VLD_MEM_VIFIFO_WRAP_COUNT);
+	writel_relaxed(1 << 4, core->dos_base + POWER_CTL_VLD);
+
+	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_START_PTR);
+	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_CURR_PTR);
+	writel_relaxed(sess->vififo_paddr + sess->vififo_size - 8, core->dos_base + VLD_MEM_VIFIFO_END_PTR);
+
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) |  1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) & ~1, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
+
+	writel_relaxed(MEM_BUFCTRL_MANUAL, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
+	writel_relaxed(sess->vififo_paddr, core->dos_base + VLD_MEM_VIFIFO_WP);
+
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) |  1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
+
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_CONTROL) | (0x11 << MEM_FIFO_CNT_BIT) | MEM_FILL_ON_LEVEL | MEM_CTRL_FILL_EN | MEM_CTRL_EMPTY_EN, core->dos_base + VLD_MEM_VIFIFO_CONTROL);
+
+	return 0;
+}
 
 irqreturn_t vdec_1_isr(int irq, void *data)
 {
 	struct vdec_core *core = data;
 	struct vdec_session *sess = core->cur_sess;
+
 	return sess->fmt_out->codec_ops->isr(sess);
 }
 
 static int vdec_1_start(struct vdec_session *sess)
 {
-	struct vdec_core *core = sess->core;
 	int ret;
+	struct vdec_core *core = sess->core;
+	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
 
 	printk("vdec_1_start\n");
 	/* Reset VDEC1 */
@@ -58,6 +165,22 @@ static int vdec_1_start(struct vdec_session *sess)
 	writel_relaxed(0x3ff, core->dos_base + GCLK_EN);
 	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) & ~(1<<31), core->dos_base + MDEC_PIC_DC_CTRL);
 
+	vdec_1_stbuf_power_up(sess);
+
+	ret = vdec_1_load_firmware(sess, sess->fmt_out->firmware_path);
+	if (ret)
+		return ret;
+
+	codec_ops->start(sess);
+
+	/* Enable firmware processor */
+	writel_relaxed(1, core->dos_base + MPSR);
+
+	/* VDEC_1 specific ESPARSER stuff */
+	writel_relaxed(0, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec
+	writel_relaxed(1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
+
 	return 0;
 }
 
@@ -65,6 +188,9 @@ static int vdec_1_stop(struct vdec_session *sess)
 {
 	struct vdec_core *core = sess->core;
 	printk("vdec_1_stop\n");
+
+	writel_relaxed(0, core->dos_base + MPSR);
+	writel_relaxed(0, core->dos_base + CPSR);
 
 	while (readl_relaxed(core->dos_base + IMEM_DMA_CTRL) & 0x8000) { }
 

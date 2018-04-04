@@ -15,10 +15,13 @@
 #include "vdec.h"
 #include "esparser.h"
 #include "canvas.h"
-#include "h264.h"
+
 #include "vdec_1.h"
-#include "hevc.h"
 #include "vdec_hevc.h"
+
+#include "codec_mpeg12.h"
+#include "codec_h264.h"
+#include "codec_hevc.h"
 
 static void vdec_abort(struct vdec_session *sess) {
 	printk("Aborting decoding session!\n");
@@ -88,20 +91,21 @@ static int vdec_queue_setup(struct vb2_queue *q,
 		unsigned int sizes[], struct device *alloc_devs[])
 {
 	struct vdec_session *sess = vb2_get_drv_priv(q);
+	struct vdec_format *fmt_out = sess->fmt_out;
+	struct vdec_format *fmt_cap = sess->fmt_cap;
 	printk("vdec_queue_setup\n");
 	
 	switch (q->type) {
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
 		sizes[0] = vdec_get_output_size(sess);
 		//*num_buffers = 2;
-		*num_planes = 1;
+		*num_planes = fmt_out->num_planes;
 		break;
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
 		sizes[0] = vdec_get_output_size(sess);
 		sizes[1] = vdec_get_output_size(sess) / 2;
-		*num_buffers = max(*num_buffers, 12 + 1);
-		//*num_buffers = 24;
-		*num_planes = 2;
+		*num_buffers = min(max(*num_buffers, fmt_out->min_buffers), fmt_out->max_buffers);
+		*num_planes = fmt_cap->num_planes;
 		break;
 	default:
 		return -EINVAL;
@@ -259,6 +263,8 @@ static const struct vdec_format vdec_formats[] = {
 		.pixfmt = V4L2_PIX_FMT_H264,
 		.num_planes = 1,
 		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+		.min_buffers = 8,
+		.max_buffers = 32,
 		.vdec_ops = &vdec_1_ops,
 		.codec_ops = &codec_h264_ops,
 		.firmware_path = "meson/gxl/gxtvbb_vh264_mc",
@@ -266,9 +272,29 @@ static const struct vdec_format vdec_formats[] = {
 		.pixfmt = V4L2_PIX_FMT_HEVC,
 		.num_planes = 1,
 		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+		.min_buffers = 8,
+		.max_buffers = 32,
 		.vdec_ops = &vdec_hevc_ops,
 		.codec_ops = &codec_hevc_ops,
 		.firmware_path = "meson/gxl/vh265_mc",
+	}, {
+		.pixfmt = V4L2_PIX_FMT_MPEG1,
+		.num_planes = 1,
+		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+		.min_buffers = 8,
+		.max_buffers = 8,
+		.vdec_ops = &vdec_1_ops,
+		.codec_ops = &codec_mpeg12_ops,
+		.firmware_path = "meson/gxl/vmpeg12_mc",
+	}, {
+		.pixfmt = V4L2_PIX_FMT_MPEG2,
+		.num_planes = 1,
+		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+		.min_buffers = 8,
+		.max_buffers = 8,
+		.vdec_ops = &vdec_1_ops,
+		.codec_ops = &codec_mpeg12_ops,
+		.firmware_path = "meson/gxl/vmpeg12_mc",
 	},
 };
 

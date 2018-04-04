@@ -1,7 +1,8 @@
 #include <media/v4l2-mem2mem.h>
 #include <media/videobuf2-dma-contig.h>
 
-#include "h264.h"
+#include "codec_h264.h"
+#include "codec_helpers.h"
 #include "canvas.h"
 
 #define SIZE_EXT_FW    (SZ_1K * 20)
@@ -47,7 +48,7 @@
 
 #define DOS_SW_RESET0 0xfc00
 
-struct vdec_h264 {
+struct codec_h264 {
 	/* H.264 decoder requires an extended firmware loaded in contiguous RAM */
 	void      *ext_fw_vaddr;
 	dma_addr_t ext_fw_paddr;
@@ -71,7 +72,7 @@ struct vdec_h264 {
 	struct task_struct *buffers_thread;
 };
 
-static int vdec_h264_buffers_thread(void *data)
+static int codec_h264_buffers_thread(void *data)
 {
 	struct vdec_buffer *tmp;
 	struct vb2_v4l2_buffer *vbuf;
@@ -138,12 +139,12 @@ static int vdec_h264_buffers_thread(void *data)
 	return 0;
 }
 
-static int vdec_h264_start(struct vdec_session *sess) {
+static int codec_h264_start(struct vdec_session *sess) {
 	struct vdec_core *core = sess->core;
-	struct vdec_h264 *h264 = sess->priv;
+	struct codec_h264 *h264 = sess->priv;
 	int ret;
 	
-	printk("vdec_h264_start\n");
+	printk("codec_h264_start\n");
 	
 	/* Allocate a "post canvas", purpose unknown */
 	h264->post_canvas_vaddr = dma_alloc_coherent(core->dev, SIZE_POST_CNV, &h264->post_canvas_paddr, GFP_KERNEL);
@@ -205,7 +206,7 @@ static int vdec_h264_start(struct vdec_session *sess) {
 
 	readl_relaxed(core->dos_base + DOS_SW_RESET0);
 	
-	h264->buffers_thread = kthread_run(vdec_h264_buffers_thread, sess, "buffers_done");
+	h264->buffers_thread = kthread_run(codec_h264_buffers_thread, sess, "buffers_done");
 	
 	return 0;
 	
@@ -216,12 +217,12 @@ free_post:
 	return ret;
 }
 
-static int vdec_h264_stop(struct vdec_session *sess)
+static int codec_h264_stop(struct vdec_session *sess)
 {
-	struct vdec_h264 *h264 = sess->priv;
+	struct codec_h264 *h264 = sess->priv;
 	struct vdec_core *core = sess->core;
 
-	printk("vdec_h264_stop\n");
+	printk("codec_h264_stop\n");
 
 	kthread_stop(h264->buffers_thread);
 
@@ -251,12 +252,12 @@ static int vdec_h264_stop(struct vdec_session *sess)
 	return 0;
 }
 
-static int vdec_h264_load_extended_firmware(struct vdec_session *sess, const u8 *data, u32 len)
+static int codec_h264_load_extended_firmware(struct vdec_session *sess, const u8 *data, u32 len)
 {
-	struct vdec_h264 *h264;
+	struct codec_h264 *h264;
 	struct vdec_core *core = sess->core;
 
-	printk("vdec_h264_load_extended_firmware\n");
+	printk("codec_h264_load_extended_firmware\n");
 	
 	h264 = kzalloc(sizeof(*h264), GFP_KERNEL);
 	if (!h264)
@@ -281,15 +282,14 @@ static int vdec_h264_load_extended_firmware(struct vdec_session *sess, const u8 
 /* Configure the H.264 decoder when the esparser finished parsing
  * the first buffer.
  */
-static void vdec_h264_set_param(struct vdec_session *sess) {
+static void codec_h264_set_param(struct vdec_session *sess) {
 	u32 max_reference_size;
 	u32 parsed_info, mb_width, mb_height, mb_total;
 	u32 mb_mv_byte;
 	u32 actual_dpb_size = v4l2_m2m_num_dst_bufs_ready(sess->m2m_ctx);
 	u32 max_dpb_size = 4;
-	struct v4l2_m2m_buffer *buf;
 	struct vdec_core *core = sess->core;
-	struct vdec_h264 *h264 = sess->priv;
+	struct codec_h264 *h264 = sess->priv;
 
 	writel_relaxed(0, core->dos_base + AV_SCRATCH_7);
 	writel_relaxed(0, core->dos_base + AV_SCRATCH_8);
@@ -316,27 +316,7 @@ static void vdec_h264_set_param(struct vdec_session *sess) {
 	mb_height = (mb_height + 3) & 0xfffffffc;
 	mb_total = mb_width * mb_height;
 
-	/* Setup NV12 canvases for Decoded Picture Buffer (dpb)
-	 * Map them to the user buffers' planes
-	 */
-	printk("Configuring %d canvases..\n", actual_dpb_size*2);
-	v4l2_m2m_for_each_dst_buf(sess->m2m_ctx, buf) {
-		u32 buf_idx    = buf->vb.vb2_buf.index;
-		u32 cnv_y_idx  = 128 + buf_idx * 2;
-		u32 cnv_uv_idx = 128 + buf_idx * 2 + 1;
-		dma_addr_t buf_y_paddr  = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 0);
-		dma_addr_t buf_uv_paddr = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 1);
-
-		/* Y plane */
-		vdec_canvas_setup(core->dmc_base, cnv_y_idx, buf_y_paddr, mb_width * 16, mb_height * 16, MESON_CANVAS_WRAP_NONE, MESON_CANVAS_BLKMODE_LINEAR);
-
-		/* U/V plane */
-		vdec_canvas_setup(core->dmc_base, cnv_uv_idx, buf_uv_paddr, mb_width * 16, mb_height * 8, MESON_CANVAS_WRAP_NONE, MESON_CANVAS_BLKMODE_LINEAR);
-
-		writel_relaxed(((cnv_uv_idx) << 16) |
-			       ((cnv_uv_idx) << 8)  |
-				(cnv_y_idx), core->dos_base + ANC0_CANVAS_ADDR + buf_idx*4);
-	}
+	codec_helper_set_canvases(sess, core->dos_base + ANC0_CANVAS_ADDR);
 
 	if (max_reference_size >= max_dpb_size)
 		max_dpb_size = max_reference_size;
@@ -385,7 +365,7 @@ static void fill_buffer_index(struct vdec_session *sess, u32 buffer_index) {
 	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 }
 
-static irqreturn_t vdec_h264_isr(struct vdec_session *sess)
+static irqreturn_t codec_h264_isr(struct vdec_session *sess)
 {
 	unsigned int cpu_cmd;
 	unsigned int buffer_index;
@@ -399,7 +379,7 @@ static irqreturn_t vdec_h264_isr(struct vdec_session *sess)
 	//printk("vdec_isr ; cpu_cmd = %08X!\n", cpu_cmd);
 
 	if ((cpu_cmd & 0xff) == 1) {
-		vdec_h264_set_param(sess);
+		codec_h264_set_param(sess);
 	} else if ((cpu_cmd & 0xff) == 2) {
 		int error_count, error, num_frame, status, eos = 0;
 		error_count = readl_relaxed(core->dos_base + AV_SCRATCH_D);
@@ -450,9 +430,9 @@ static irqreturn_t vdec_h264_isr(struct vdec_session *sess)
 }
 
 struct vdec_codec_ops codec_h264_ops = {
-	.start = vdec_h264_start,
-	.stop = vdec_h264_stop,
-	.load_extended_firmware = vdec_h264_load_extended_firmware,
-	.isr = vdec_h264_isr,
+	.start = codec_h264_start,
+	.stop = codec_h264_stop,
+	.load_extended_firmware = codec_h264_load_extended_firmware,
+	.isr = codec_h264_isr,
 };
 

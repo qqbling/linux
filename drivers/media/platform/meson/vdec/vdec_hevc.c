@@ -100,14 +100,19 @@ static int vdec_hevc_start(struct vdec_session *sess)
 	udelay(10);
 	writel_relaxed(0x00000000, core->dos_base + DOS_SW_RESET3);
 
+	vdec_hevc_stbuf_init(sess);
+
 	ret = vdec_hevc_load_firmware(sess, sess->fmt_out->firmware_path);
 	if (ret)
 		return ret;
 
 	codec_ops->start(sess);
 
+	writel_relaxed((1<<12)|(1<<11), core->dos_base + DOS_SW_RESET3);
+	writel_relaxed(0, core->dos_base + DOS_SW_RESET3);
+	readl_relaxed(core->dos_base + DOS_SW_RESET3);
+
 	writel_relaxed(1, core->dos_base + HEVC_MPSR);
-	vdec_hevc_stbuf_init(sess);
 
 	/* VDEC_HEVC specific ESPARSER stuff */
 	writel_relaxed(3 << 1, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec_hevc

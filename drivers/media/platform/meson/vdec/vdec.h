@@ -66,10 +66,14 @@ struct vdec_codec_ops {
 /* Describes one of the format that can be decoded/encoded */
 struct vdec_format {
 	u32 pixfmt;
-	unsigned int num_planes;
+	u32 num_planes;
 	u32 type;
+	u32 min_buffers;
+	u32 max_buffers;
+
 	struct vdec_ops *vdec_ops;
 	struct vdec_codec_ops *codec_ops;
+
 	char *firmware_path;
 };
 

@@ -1,7 +1,7 @@
 #include <media/v4l2-mem2mem.h>
 #include <media/videobuf2-dma-contig.h>
 
-#include "hevc.h"
+#include "codec_hevc.h"
 #include "canvas.h"
 #include "hevc_regs.h"
 
@@ -11,8 +11,12 @@
 
 #define DOS_SW_RESET3        0xfcd0
 
+/* DMC Registers */
+#define DMC_REQ_CTRL	0x00
+
 /* HEVC reg mapping */
 #define HEVC_DEC_STATUS_REG       HEVC_ASSIST_SCRATCH_0
+	#define HEVC_ACTION_DONE	0xff
 #define HEVC_RPM_BUFFER           HEVC_ASSIST_SCRATCH_1
 #define HEVC_SHORT_TERM_RPS       HEVC_ASSIST_SCRATCH_2
 #define HEVC_VPS_BUFFER           HEVC_ASSIST_SCRATCH_3
@@ -124,9 +128,10 @@ static int codec_hevc_buffers_thread(void *data)
 	struct vb2_v4l2_buffer *vbuf;
 	unsigned long flags;
 	struct vdec_session *sess = data;
+	struct vdec_core *core = sess->core;
 
 	while (!kthread_should_stop()) {
-
+		//printk("status: %08X\n", readl_relaxed(core->dos_base + HEVC_PARSER_INT_STATUS));
 		/* The DONE part should probably be in a common thread */
 		spin_lock_irqsave(&sess->bufs_spinlock, flags);
 		while (!list_empty(&sess->bufs))
@@ -219,7 +224,7 @@ static int codec_hevc_setup_workspace(struct vdec_session *sess) {
 	writel_relaxed(hevc->workspace_paddr + SCALELUT_OFFSET, core->dos_base + HEVC_SCALELUT);
 	writel_relaxed(hevc->workspace_paddr + DBLK_PARA_OFFSET, core->dos_base + HEVC_DBLK_CFG4);
 	writel_relaxed(hevc->workspace_paddr + DBLK_DATA_OFFSET, core->dos_base + HEVC_DBLK_CFG5);
-	writel_relaxed(hevc->workspace_paddr + LMEM_OFFSET, core->dos_base + LMEM_DUMP_ADR);
+	//writel_relaxed(hevc->workspace_paddr + LMEM_OFFSET, core->dos_base + LMEM_DUMP_ADR);
 
 	return 0;
 }
@@ -238,10 +243,14 @@ static int codec_hevc_start(struct vdec_session *sess) {
 
 	sess->priv = hevc;
 
+	writel_relaxed(readl_relaxed(core->dmc_base + DMC_REQ_CTRL) | (1 << 4), core->dmc_base + DMC_REQ_CTRL);
+
 	codec_hevc_setup_workspace(sess);
 
 	writel_relaxed(0x5a5a55aa, core->dos_base + HEVC_PARSER_VERSION);
 	writel_relaxed((1 << 14), core->dos_base + DOS_SW_RESET3);
+	writel_relaxed(0, core->dos_base + HEVC_CABAC_CONTROL);
+	writel_relaxed(0, core->dos_base + HEVC_PARSER_CORE_CONTROL);
 	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_CONTROL) | 1, core->dos_base + HEVC_STREAM_CONTROL);
 	writel_relaxed(0x12345678, core->dos_base + HEVC_SHIFT_STARTCODE);
 	writel_relaxed(0x9abcdef0, core->dos_base + HEVC_SHIFT_EMULATECODE);
@@ -272,6 +281,9 @@ static int codec_hevc_start(struct vdec_session *sess) {
 	writel_relaxed(1, core->dos_base + HEVCD_IPP_TOP_CNTL);
 	writel_relaxed((1 << 1), core->dos_base + HEVCD_IPP_TOP_CNTL);
 
+	/* Enable NV21 reference read mode for MC */
+	writel_relaxed(1 << 31, core->dos_base + HEVCD_MPP_DECOMP_CTL1);
+
 	writel_relaxed(1, core->dos_base + HEVC_WAIT_FLAG);
 
 	/* clear mailbox interrupt */
@@ -297,11 +309,11 @@ static int codec_hevc_start(struct vdec_session *sess) {
 	);*/
 
 	codec_hevc_setup_buffers(sess);
+
+	writel_relaxed(HEVC_ACTION_DONE, core->dos_base + HEVC_DEC_STATUS_REG);
 	writel_relaxed(1, core->dos_base + HEVC_ASSIST_MBOX1_IRQ_REG);
 
-	writel_relaxed((1<<12)|(1<<11), core->dos_base + DOS_SW_RESET3);
-	writel_relaxed(0, core->dos_base + DOS_SW_RESET3);
-	readl_relaxed(core->dos_base + DOS_SW_RESET3);
+	//writel_relaxed(HEVC_ACTION_DONE, core->dos_base + HEVC_DECODE_SIZE);
 
 	hevc->buffers_thread = kthread_run(codec_hevc_buffers_thread, sess, "buffers_done");
 

@@ -141,7 +141,7 @@ int esparser_queue(void *data) {
 	int ret;
 
 	for (;;) {
-		ret = wait_event_interruptible(sess->input_buf_wq, sess->input_bufs_ready  == 1  || kthread_should_stop());
+		ret = wait_event_interruptible(sess->input_buf_wq, sess->input_bufs_ready == 1 || kthread_should_stop());
 		if (kthread_should_stop())
 			break;
 

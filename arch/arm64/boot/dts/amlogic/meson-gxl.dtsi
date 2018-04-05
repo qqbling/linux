@@ -790,8 +790,10 @@
 	clocks = <&clkc CLKID_VPU_INTR>, <&clkc CLKID_DOS_PARSER>, <&clkc CLKID_VDEC_1>, <&clkc CLKID_VDEC_HEVC>;
 	clock-names = "vpu_intr", "dos_parser", "vdec_1", "vdec_hevc";
 
-	assigned-clocks = <&clkc CLKID_VDEC_1>,
-			  <&clkc CLKID_VDEC_HEVC>;
-	assigned-clock-rates = <648000000>,
-			       <648000000>;
+	assigned-clocks = <&clkc CLKID_VDEC_1_SEL>,
+			  <&clkc CLKID_VDEC_1>;
+	assigned-clock-parents = <&clkc CLKID_FCLK_DIV3>,
+				 <0>;
+	assigned-clock-rates = <0>,
+			       <666666666>;
 };

@@ -213,7 +213,7 @@ int esparser_power_up(struct vdec_session *sess) {
 
 	/* parser video */
 	writel_relaxed(sess->vififo_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
-	writel_relaxed(sess->vififo_paddr + sess->vififo_size, core->esparser_base + PARSER_VIDEO_END_PTR);
+	writel_relaxed(sess->vififo_paddr + sess->vififo_size - 8, core->esparser_base + PARSER_VIDEO_END_PTR);
 	writel_relaxed(readl_relaxed(core->esparser_base + PARSER_ES_CONTROL) & ~1, core->esparser_base + PARSER_ES_CONTROL);
 	
 	writel_relaxed(0xffff, core->esparser_base + PARSER_INT_STATUS);

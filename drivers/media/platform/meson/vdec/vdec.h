@@ -53,6 +53,7 @@ struct vdec_core {
 struct vdec_ops {
 	int (*start)(struct vdec_session *sess);
 	int (*stop)(struct vdec_session *sess);
+	void (*conf_esparser)(struct vdec_session *sess);
 };
 
 /* Describes one of the compression standard supported (H.264, HEVC..) */

@@ -79,6 +79,17 @@ static void vdec_hevc_stbuf_init(struct vdec_session *sess) {
 	printk("vdec_hevc_stbuf_init end\n");
 }
 
+static void vdec_hevc_conf_esparser(struct vdec_session *sess) {
+	struct vdec_core *core = sess->core;
+
+	printk("vdec_hevc_conf_esparser\n");
+	/* VDEC_HEVC specific ESPARSER stuff */
+	writel_relaxed(3 << 1, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec_hevc
+	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_CONTROL) | (1 << 3), core->dos_base + HEVC_STREAM_CONTROL);
+	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_CONTROL) | 1, core->dos_base + HEVC_STREAM_CONTROL);
+	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_FIFO_CTL) | (1 << 29), core->dos_base + HEVC_STREAM_FIFO_CTL);
+}
+
 static int vdec_hevc_start(struct vdec_session *sess)
 {
 	int ret;
@@ -87,18 +98,18 @@ static int vdec_hevc_start(struct vdec_session *sess)
 
 	printk("vdec_hevc_start\n");
 
+	/* Reset VDEC_HEVC*/
+	writel_relaxed(0xffffffff, core->dos_base + DOS_SW_RESET3);
+	udelay(10);
+	writel_relaxed(0x00000000, core->dos_base + DOS_SW_RESET3);
+
 	writel_relaxed(0xffffffff, core->dos_base + DOS_GCLK_EN3);
 
 	/* VDEC_HEVC Memories */
 	writel_relaxed(0x00000000, core->dos_base + DOS_MEM_PD_HEVC);
 
 	/* Remove VDEC_HEVC Isolation */
-	regmap_write(core->regmap_ao, AO_RTI_GEN_PWR_ISO0, ~0xc00);
-
-	/* Reset VDEC_HEVC*/
-	writel_relaxed(0xffffffff, core->dos_base + DOS_SW_RESET3);
-	udelay(10);
-	writel_relaxed(0x00000000, core->dos_base + DOS_SW_RESET3);
+	regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0, 0xc00, 0);
 
 	vdec_hevc_stbuf_init(sess);
 
@@ -113,11 +124,6 @@ static int vdec_hevc_start(struct vdec_session *sess)
 	readl_relaxed(core->dos_base + DOS_SW_RESET3);
 
 	writel_relaxed(1, core->dos_base + HEVC_MPSR);
-
-	/* VDEC_HEVC specific ESPARSER stuff */
-	writel_relaxed(3 << 1, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec_hevc
-	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_CONTROL) | (1 << 3) | 1, core->dos_base + HEVC_STREAM_CONTROL);
-	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_FIFO_CTL) | (1 << 29), core->dos_base + HEVC_STREAM_FIFO_CTL);
 
 	printk("vdec_hevc_start end\n");
 
@@ -141,4 +147,5 @@ static int vdec_hevc_stop(struct vdec_session *sess)
 struct vdec_ops vdec_hevc_ops = {
 	.start = vdec_hevc_start,
 	.stop = vdec_hevc_stop,
+	.conf_esparser = vdec_hevc_conf_esparser,
 };

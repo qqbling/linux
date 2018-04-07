@@ -190,6 +190,7 @@ end:
 
 int esparser_power_up(struct vdec_session *sess) {
 	struct vdec_core *core = sess->core;
+	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 
 	// WRITE_MPEG_REG(FEC_INPUT_CONTROL, 0);
 	writel_relaxed((10 << PS_CFG_PFIFO_EMPTY_CNT_BIT) |
@@ -216,6 +217,9 @@ int esparser_power_up(struct vdec_session *sess) {
 	writel_relaxed(sess->vififo_paddr + sess->vififo_size - 8, core->esparser_base + PARSER_VIDEO_END_PTR);
 	writel_relaxed(readl_relaxed(core->esparser_base + PARSER_ES_CONTROL) & ~1, core->esparser_base + PARSER_ES_CONTROL);
 	
+	if (vdec_ops->conf_esparser)
+		vdec_ops->conf_esparser(sess);
+
 	writel_relaxed(0xffff, core->esparser_base + PARSER_INT_STATUS);
 	writel_relaxed(1 << PARSER_INT_HOST_EN_BIT, core->esparser_base + PARSER_INT_ENABLE);
 

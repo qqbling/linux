@@ -14,7 +14,6 @@
 #define PSCALE_CTRL 0x2444
 
 #define MDEC_PIC_DC_CTRL   0x2638
-#define MDEC_PIC_DC_THRESH 0x26e0
 
 #define AV_SCRATCH_0		0x2700
 #define MREG_SEQ_INFO		0x2710
@@ -78,7 +77,6 @@ static int codec_mpeg12_buffers_thread(void *data)
 				printk("%d\n", vbuf->sequence);
 
 			printk("Buffer %d done\n", tmp->index);
-
 			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 			list_del(&tmp->list);
 			kfree(tmp);
@@ -125,7 +123,7 @@ static int codec_mpeg12_start(struct vdec_session *sess) {
 	/* Allocate some memory for the MPEG1/2 decoder's state */
 	mpeg12->workspace_vaddr = dma_alloc_coherent(core->dev, SIZE_WORKSPACE, &mpeg12->workspace_paddr, GFP_KERNEL);
 	if (!mpeg12->workspace_vaddr) {
-		printk("Failed to request H.264 Workspace\n");
+		printk("Failed to request MPEG 1/2 Workspace\n");
 		ret = -ENOMEM;
 		goto free_mpeg12;
 	}

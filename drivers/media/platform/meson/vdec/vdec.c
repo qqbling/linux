@@ -276,7 +276,7 @@ static const struct vdec_format vdec_formats[] = {
 		.max_buffers = 32,
 		.vdec_ops = &vdec_hevc_ops,
 		.codec_ops = &codec_hevc_ops,
-		.firmware_path = "meson/gxl/vh265_mc",
+		.firmware_path = "meson/gxl/vh265_mc_mmu",
 	}, {
 		.pixfmt = V4L2_PIX_FMT_MPEG1,
 		.num_planes = 1,

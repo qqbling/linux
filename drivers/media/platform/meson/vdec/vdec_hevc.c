@@ -65,7 +65,8 @@ static int vdec_hevc_load_firmware(struct vdec_session *sess, const char* fwname
 	return ret;
 }
 
-static void vdec_hevc_stbuf_init(struct vdec_session *sess) {
+static void vdec_hevc_stbuf_init(struct vdec_session *sess)
+{
 	struct vdec_core *core = sess->core;
 
 	printk("vdec_hevc_stbuf_init\n");
@@ -79,7 +80,8 @@ static void vdec_hevc_stbuf_init(struct vdec_session *sess) {
 	printk("vdec_hevc_stbuf_init end\n");
 }
 
-static void vdec_hevc_conf_esparser(struct vdec_session *sess) {
+static void vdec_hevc_conf_esparser(struct vdec_session *sess)
+{
 	struct vdec_core *core = sess->core;
 
 	printk("vdec_hevc_conf_esparser\n");

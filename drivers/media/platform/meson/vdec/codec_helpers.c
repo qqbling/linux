@@ -4,7 +4,8 @@
 #include "codec_helpers.h"
 #include "canvas.h"
 
-void codec_helper_set_canvases(struct vdec_session *sess, void *reg_base) {
+void codec_helper_set_canvases(struct vdec_session *sess, void *reg_base)
+{
 	struct vdec_core *core = sess->core;
 	u32 width = ALIGN(sess->width, 64);
 	u32 height = ALIGN(sess->height, 64);
@@ -30,4 +31,23 @@ void codec_helper_set_canvases(struct vdec_session *sess, void *reg_base) {
 			       ((cnv_uv_idx) << 8)  |
 				(cnv_y_idx), reg_base + buf_idx*4);
 	}
+}
+
+/* Map a ready HW buffer index with a previously queued OUTPUT buffer's timestamp */
+void codec_helper_fill_buf_idx(struct vdec_session *sess, u32 buffer_index)
+{
+	struct vdec_buffer *tmp;
+	unsigned long flags;
+
+	spin_lock_irqsave(&sess->bufs_spinlock, flags);
+	list_for_each_entry(tmp, &sess->bufs, list) {
+		if (tmp->index == -1) {
+			tmp->index = buffer_index;
+			goto unlock;
+		}
+	}
+
+	printk("Couldn't fill buffer idx %d\n", buffer_index);
+unlock:
+	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 }

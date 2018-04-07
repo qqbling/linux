@@ -198,7 +198,8 @@ static int codec_hevc_buffers_thread(void *data)
 	return 0;
 }
 
-static void codec_hevc_setup_buffers(struct vdec_session *sess) {
+static void codec_hevc_setup_buffers(struct vdec_session *sess)
+{
 	int i;
 	dma_addr_t buf_y_paddr = 0;
 	dma_addr_t buf_uv_paddr;
@@ -233,7 +234,8 @@ static void codec_hevc_setup_buffers(struct vdec_session *sess) {
 		writel_relaxed(0, core->dos_base + HEVCD_MPP_ANC_CANVAS_DATA_ADDR);
 }
 
-static int codec_hevc_setup_workspace(struct vdec_session *sess) {
+static int codec_hevc_setup_workspace(struct vdec_session *sess)
+{
 	struct vdec_core *core = sess->core;
 	struct codec_hevc *hevc = sess->priv;
 
@@ -273,7 +275,8 @@ static int codec_hevc_setup_workspace(struct vdec_session *sess) {
 	return 0;
 }
 
-static int codec_hevc_start(struct vdec_session *sess) {
+static int codec_hevc_start(struct vdec_session *sess)
+{
 	struct vdec_core *core = sess->core;
 	struct codec_hevc *hevc;
 	int ret;
@@ -389,21 +392,6 @@ static int codec_hevc_stop(struct vdec_session *sess)
 	sess->priv = 0;
 
 	return 0;
-}
-
-/* Map a ready HW buffer index with a previously queued OUTPUT buffer's timestamp */
-static void fill_buffer_index(struct vdec_session *sess, u32 buffer_index) {
-	struct vdec_buffer *tmp;
-	unsigned long flags;
-
-	spin_lock_irqsave(&sess->bufs_spinlock, flags);
-	list_for_each_entry(tmp, &sess->bufs, list) {
-		if (tmp->index == -1) {
-			tmp->index = buffer_index;
-			break;
-		}
-	}
-	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 }
 
 static irqreturn_t codec_hevc_isr(struct vdec_session *sess)

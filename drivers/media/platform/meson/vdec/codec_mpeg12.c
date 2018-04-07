@@ -41,6 +41,8 @@ struct codec_mpeg12 {
 	void      *workspace_vaddr;
 	dma_addr_t workspace_paddr;
 
+	u32 last_buf_idx;
+
 	/* Housekeeping thread for marking buffers to DONE
 	 * and recycling them into the hardware
 	 */
@@ -154,6 +156,7 @@ static int codec_mpeg12_start(struct vdec_session *sess) {
 	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) | (1 << 17), core->dos_base + MDEC_PIC_DC_CTRL);
 
 	mpeg12->buffers_thread = kthread_run(codec_mpeg12_buffers_thread, sess, "buffers_done");
+	mpeg12->last_buf_idx = 7;
 
 	return 0;
 
@@ -182,26 +185,12 @@ static int codec_mpeg12_stop(struct vdec_session *sess)
 	return 0;
 }
 
-/* Map a ready HW buffer index with a previously queued OUTPUT buffer's timestamp */
-static void fill_buffer_index(struct vdec_session *sess, u32 buffer_index) {
-	struct vdec_buffer *tmp;
-	unsigned long flags;
-
-	spin_lock_irqsave(&sess->bufs_spinlock, flags);
-	list_for_each_entry(tmp, &sess->bufs, list) {
-		if (tmp->index == -1) {
-			tmp->index = buffer_index;
-			break;
-		}
-	}
-	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
-}
-
 static irqreturn_t codec_mpeg12_isr(struct vdec_session *sess)
 {
 	u32 reg;
 	u32 buffer_index;
 	struct vdec_core *core = sess->core;
+	struct codec_mpeg12 *mpeg12 = sess->priv;
 
 	writel_relaxed(1, core->dos_base + ASSIST_MBOX1_CLR_REG);
 
@@ -218,7 +207,7 @@ static irqreturn_t codec_mpeg12_isr(struct vdec_session *sess)
 		goto end;
 
 	buffer_index = ((reg & 0xf) - 1) & 7;
-	fill_buffer_index(sess, buffer_index);
+	codec_helper_fill_buf_idx(sess, buffer_index);
 
 end:
 	writel_relaxed(0, core->dos_base + MREG_BUFFEROUT);

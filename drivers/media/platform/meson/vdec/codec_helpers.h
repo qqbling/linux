@@ -4,5 +4,6 @@
 #include "vdec.h"
 
 void codec_helper_set_canvases(struct vdec_session *sess, void *reg_base);
+void codec_helper_fill_buf_idx(struct vdec_session *sess, u32 buffer_index);
 
 #endif

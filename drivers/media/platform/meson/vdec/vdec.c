@@ -20,6 +20,7 @@
 #include "vdec_hevc.h"
 
 #include "codec_mpeg12.h"
+#include "codec_mpeg4.h"
 #include "codec_h264.h"
 #include "codec_hevc.h"
 
@@ -98,13 +99,14 @@ static int vdec_queue_setup(struct vb2_queue *q,
 	switch (q->type) {
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
 		sizes[0] = vdec_get_output_size(sess);
-		//*num_buffers = 2;
+		sess->num_input_bufs = *num_buffers;
 		*num_planes = fmt_out->num_planes;
 		break;
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
 		sizes[0] = vdec_get_output_size(sess);
 		sizes[1] = vdec_get_output_size(sess) / 2;
 		*num_buffers = min(max(*num_buffers, fmt_out->min_buffers), fmt_out->max_buffers);
+		sess->num_output_bufs = *num_buffers;
 		*num_planes = fmt_cap->num_planes;
 		break;
 	default:
@@ -295,6 +297,33 @@ static const struct vdec_format vdec_formats[] = {
 		.vdec_ops = &vdec_1_ops,
 		.codec_ops = &codec_mpeg12_ops,
 		.firmware_path = "meson/gxl/vmpeg12_mc",
+	}, {
+		.pixfmt = V4L2_PIX_FMT_MPEG4,
+		.num_planes = 1,
+		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+		.min_buffers = 8,
+		.max_buffers = 8,
+		.vdec_ops = &vdec_1_ops,
+		.codec_ops = &codec_mpeg4_ops,
+		.firmware_path = "meson/gxl/vmpeg4_mc_5",
+	}, {
+		.pixfmt = V4L2_PIX_FMT_H263,
+		.num_planes = 1,
+		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+		.min_buffers = 8,
+		.max_buffers = 8,
+		.vdec_ops = &vdec_1_ops,
+		.codec_ops = &codec_mpeg4_ops,
+		.firmware_path = "meson/gxl/h263_mc",
+	}, {
+		.pixfmt = V4L2_PIX_FMT_XVID,
+		.num_planes = 1,
+		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+		.min_buffers = 8,
+		.max_buffers = 8,
+		.vdec_ops = &vdec_1_ops,
+		.codec_ops = &codec_mpeg4_ops,
+		.firmware_path = "meson/gxl/vmpeg4_mc_5",
 	},
 };
 
@@ -372,6 +401,7 @@ vdec_try_fmt_common(struct v4l2_format *f)
 	pixmp->flags = 0;
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+		memset(pfmt[1].reserved, 0, sizeof(pfmt[1].reserved));
 		pfmt[0].sizeimage = get_output_size(pixmp->width, pixmp->height);
 		pfmt[0].bytesperline = ALIGN(pixmp->width, 64);
 
@@ -606,9 +636,12 @@ static int vdec_open(struct file *file)
 		return -ENOMEM;
 
 	printk("vdec_open\n");
-	
+
 	sess->core = core;
-	core->cur_sess = sess;
+	sess->fmt_cap = &vdec_formats[0];
+	sess->fmt_out = &vdec_formats[1];
+	sess->width = 1280;
+	sess->height = 720;
 	INIT_LIST_HEAD(&sess->bufs);
 	INIT_LIST_HEAD(&sess->bufs_recycle);
 	init_waitqueue_head(&sess->input_buf_wq);
@@ -617,8 +650,7 @@ static int vdec_open(struct file *file)
 	mutex_init(&sess->bufs_recycle_lock);
 	sema_init(&sess->queue_sema, 24);
 
-	sess->fmt_cap = &vdec_formats[0];
-	sess->fmt_out = &vdec_formats[1];
+	core->cur_sess = sess;
 
 	sess->m2m_dev = v4l2_m2m_init(&vdec_m2m_ops);
 	if (IS_ERR(sess->m2m_dev)) {

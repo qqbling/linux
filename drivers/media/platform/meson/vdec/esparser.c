@@ -102,6 +102,25 @@ unlock:
 	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 }
 
+static void remove_buffer_from_list(struct vdec_session *sess, u64 ts)
+{
+	struct vdec_buffer *tmp;
+	unsigned long flags;
+
+	spin_lock_irqsave(&sess->bufs_spinlock, flags);
+	list_for_each_entry(tmp, &sess->bufs, list) {
+		if (tmp->timestamp == ts) {
+			list_del(&tmp->list);
+			kfree(tmp);
+			goto unlock;
+		}
+	}
+	printk("Couldn't remove buffer with timestamp %llu from list\n", ts);
+
+unlock:
+	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
+}
+
 /* Add a start code at the end of the buffer
  * to trigger the esparser interrupt
  */
@@ -152,6 +171,7 @@ int esparser_queue(void *data) {
 
 		v4l2_m2m_for_each_src_buf_safe(sess->m2m_ctx, buf, n) {
 			struct vb2_v4l2_buffer *vbuf = &buf->vb;
+			struct vb2_buffer *vb = &vbuf->vb2_buf;
 			v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);
 
 			while (down_timeout(&sess->queue_sema, HZ) < 0) {
@@ -163,20 +183,20 @@ int esparser_queue(void *data) {
 				printk("Timed out waiting for an input slot. Trying again..\n");
 			}
 
+			new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
+			new_buf->timestamp = vb->timestamp;
+			new_buf->index = -1;
+			add_buffer_to_list(sess, new_buf);
+
 			ret = esparser_process_buf(core, vbuf);
 
 			if (ret > 0) {
-				struct vb2_buffer *vb = &vbuf->vb2_buf;
-				new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
-				new_buf->timestamp = vb->timestamp;
-				new_buf->index = -1;
-				add_buffer_to_list(sess, new_buf);
-
 				vbuf->flags = 0;
 				vbuf->field = V4L2_FIELD_NONE;
 				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 			} else if (ret <= 0) {
 				printk("ESPARSER input parsing fatal error\n");
+				remove_buffer_from_list(sess, vb->timestamp);
 				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
 				writel_relaxed(0, core->esparser_base + PARSER_FETCH_CMD);
 				up(&sess->queue_sema);

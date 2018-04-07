@@ -96,6 +96,9 @@ struct vdec_session {
 	u8 quantization;
 	u8 xfer_func;
 
+	u32 num_input_bufs;
+	u32 num_output_bufs;
+
 	/* Whether capture/output streaming are on */
 	unsigned int streamon_cap, streamon_out;
 	

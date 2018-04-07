@@ -140,6 +140,16 @@ irqreturn_t vdec_1_isr(int irq, void *data)
 	return sess->fmt_out->codec_ops->isr(sess);
 }
 
+static void vdec_1_conf_esparser(struct vdec_session *sess)
+{
+	struct vdec_core *core = sess->core;
+
+	/* VDEC_1 specific ESPARSER stuff */
+	writel_relaxed(0, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec
+	writel_relaxed(1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
+	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
+}
+
 static int vdec_1_start(struct vdec_session *sess)
 {
 	int ret;
@@ -175,11 +185,6 @@ static int vdec_1_start(struct vdec_session *sess)
 
 	/* Enable firmware processor */
 	writel_relaxed(1, core->dos_base + MPSR);
-
-	/* VDEC_1 specific ESPARSER stuff */
-	writel_relaxed(0, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec
-	writel_relaxed(1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
-	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 
 	return 0;
 }
@@ -227,4 +232,5 @@ static int vdec_1_stop(struct vdec_session *sess)
 struct vdec_ops vdec_1_ops = {
 	.start = vdec_1_start,
 	.stop = vdec_1_stop,
+	.conf_esparser = vdec_1_conf_esparser,
 };

@@ -338,21 +338,6 @@ static void codec_h264_set_param(struct vdec_session *sess) {
 	writel_relaxed((max_reference_size << 24) | (actual_dpb_size << 16) | (max_dpb_size << 8), core->dos_base + AV_SCRATCH_0);
 }
 
-/* Map a ready HW buffer index with a previously queued OUTPUT buffer's timestamp */
-static void fill_buffer_index(struct vdec_session *sess, u32 buffer_index) {
-	struct vdec_buffer *tmp;
-	unsigned long flags;
-
-	spin_lock_irqsave(&sess->bufs_spinlock, flags);
-	list_for_each_entry(tmp, &sess->bufs, list) {
-		if (tmp->index == -1) {
-			tmp->index = buffer_index;
-			break;
-		}
-	}
-	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
-}
-
 static irqreturn_t codec_h264_isr(struct vdec_session *sess)
 {
 	unsigned int cpu_cmd;
@@ -407,7 +392,7 @@ static irqreturn_t codec_h264_isr(struct vdec_session *sess)
 				continue;
 			}
 
-			fill_buffer_index(sess, buffer_index);
+			codec_helper_fill_buf_idx(sess, buffer_index);
 		}
 
 		writel_relaxed(0, core->dos_base + AV_SCRATCH_0);

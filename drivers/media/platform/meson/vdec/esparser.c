@@ -143,7 +143,8 @@ static int esparser_queue(struct vdec_session *sess, struct vb2_v4l2_buffer *vbu
 	struct vdec_core *core = sess->core;
 	u32 payload_size = vb2_get_plane_payload(vb, 0);
 
-	if (esparser_vififo_free_space(sess) < payload_size)
+	if (esparser_vififo_free_space(sess) < payload_size ||
+	    atomic_read(&sess->esparser_queued_bufs) >= 17)
 		return -EAGAIN;
 
 	v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);
@@ -174,6 +175,8 @@ void esparser_queue_all_src(struct work_struct *work)
 	v4l2_m2m_for_each_src_buf_safe(sess->m2m_ctx, buf, n) {
 		if (esparser_queue(sess, &buf->vb) < 0)
 			break;
+
+		atomic_inc(&sess->esparser_queued_bufs);
 	}
 }
 

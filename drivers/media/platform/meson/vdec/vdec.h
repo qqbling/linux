@@ -100,6 +100,9 @@ struct vdec_session {
 	u32 num_input_bufs;
 	u32 num_output_bufs;
 
+	/* Number of buffers currently queued into ESPARSER */
+	atomic_t esparser_queued_bufs;
+
 	/* Work for the ESPARSER to process src buffers */
 	struct work_struct esparser_queue_work;
 

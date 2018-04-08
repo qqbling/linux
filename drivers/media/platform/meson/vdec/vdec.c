@@ -708,6 +708,7 @@ void vdec_dst_buf_done(struct vdec_session *sess, u32 buf_idx)
 	vbuf->vb2_buf.timestamp = tmp->timestamp;
 	vbuf->sequence = sess->sequence_cap++;
 
+	atomic_dec(&sess->esparser_queued_bufs);
 	v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 	list_del(&tmp->list);
 	kfree(tmp);

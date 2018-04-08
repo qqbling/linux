@@ -22,32 +22,33 @@
 #include "esparser.h"
 
 /* PARSER REGS (CBUS) */
-#define PARSER_INT_STATUS 0x30
-	#define PARSER_INTSTAT_SC_FOUND 1
-#define PARSER_INT_ENABLE 0x2c
-	#define PARSER_INT_HOST_EN_BIT 8
-#define PARSER_VIDEO_START_PTR 0x80
-#define PARSER_VIDEO_END_PTR 0x84
-#define PARSER_ES_CONTROL 0x5c
-#define PARSER_CONFIG 0x14
-	#define PS_CFG_MAX_FETCH_CYCLE_BIT  0
-	#define PS_CFG_STARTCODE_WID_24_BIT 10
-	#define PS_CFG_MAX_ES_WR_CYCLE_BIT  12
-	#define PS_CFG_PFIFO_EMPTY_CNT_BIT  16
 #define PARSER_CONTROL 0x00
 	#define ES_PACK_SIZE_BIT	8
 	#define ES_WRITE		BIT(5)
 	#define ES_SEARCH		BIT(1)
 	#define ES_PARSER_START		BIT(0)
-#define PFIFO_RD_PTR 0x1c
+#define PARSER_FETCH_ADDR 0x4
+#define PARSER_FETCH_CMD  0x8
+#define PARSER_CONFIG 0x14
+	#define PS_CFG_MAX_FETCH_CYCLE_BIT  0
+	#define PS_CFG_STARTCODE_WID_24_BIT 10
+	#define PS_CFG_MAX_ES_WR_CYCLE_BIT  12
+	#define PS_CFG_PFIFO_EMPTY_CNT_BIT  16
 #define PFIFO_WR_PTR 0x18
+#define PFIFO_RD_PTR 0x1c
 #define PARSER_SEARCH_PATTERN 0x24
 	#define ES_START_CODE_PATTERN 0x00000100
 #define PARSER_SEARCH_MASK 0x28
 	#define ES_START_CODE_MASK	0xffffff00
-#define PARSER_FETCH_ADDR 0x4
-#define PARSER_FETCH_CMD  0x8
 	#define FETCH_ENDIAN_BIT	  27
+#define PARSER_INT_ENABLE 0x2c
+	#define PARSER_INT_HOST_EN_BIT 8
+#define PARSER_INT_STATUS 0x30
+	#define PARSER_INTSTAT_SC_FOUND 1
+#define PARSER_ES_CONTROL 0x5c
+#define PARSER_VIDEO_START_PTR 0x80
+#define PARSER_VIDEO_END_PTR 0x84
+#define PARSER_VIDEO_HOLE 0x90
 
 /* STBUF regs */
 #define VLD_MEM_VIFIFO_BUF_CNTL 0x3120
@@ -58,7 +59,8 @@
 static DECLARE_WAIT_QUEUE_HEAD(wq);
 static int search_done;
 
-static irqreturn_t esparser_isr(int irq, void *dev) {
+static irqreturn_t esparser_isr(int irq, void *dev)
+{
 	int int_status;
 	struct vdec_core *core = dev;
 
@@ -77,50 +79,6 @@ static irqreturn_t esparser_isr(int irq, void *dev) {
 	return IRQ_HANDLED;
 }
 
-/**
- * Userspace is very likely to feed us packets with timestamps not in chronological order
- * because of B-frames. Rearrange them here.
- */
-static void add_buffer_to_list(struct vdec_session *sess, struct vdec_buffer *new_buf) {
-	struct vdec_buffer *tmp;
-	unsigned long flags;
-
-	spin_lock_irqsave(&sess->bufs_spinlock, flags);
-	if (list_empty(&sess->bufs))
-		goto add_core;
-
-	list_for_each_entry(tmp, &sess->bufs, list) {
-		if (new_buf->timestamp < tmp->timestamp) {
-			list_add_tail(&new_buf->list, &tmp->list);
-			goto unlock;
-		}
-	}
-
-add_core:
-	list_add_tail(&new_buf->list, &sess->bufs);
-unlock:
-	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
-}
-
-static void remove_buffer_from_list(struct vdec_session *sess, u64 ts)
-{
-	struct vdec_buffer *tmp;
-	unsigned long flags;
-
-	spin_lock_irqsave(&sess->bufs_spinlock, flags);
-	list_for_each_entry(tmp, &sess->bufs, list) {
-		if (tmp->timestamp == ts) {
-			list_del(&tmp->list);
-			kfree(tmp);
-			goto unlock;
-		}
-	}
-	printk("Couldn't remove buffer with timestamp %llu from list\n", ts);
-
-unlock:
-	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
-}
-
 /* Add a start code at the end of the buffer
  * to trigger the esparser interrupt
  */
@@ -134,9 +92,9 @@ static void esparser_append_start_code(struct vb2_buffer *vb)
 	vaddr[3] = 0xff;
 }
 
-int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
-	struct vb2_buffer *vb = &vbuf->vb2_buf;
-	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(&vbuf->vb2_buf, 0);
+static int esparser_process_buf(struct vdec_core *core, struct vb2_buffer *vb)
+{
+	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(vb, 0);
 	u32 payload_size = vb2_get_plane_payload(vb, 0);
 
 	esparser_append_start_code(vb);
@@ -152,67 +110,69 @@ int esparser_process_buf(struct vdec_core *core, struct vb2_v4l2_buffer *vbuf) {
 	return wait_event_interruptible_timeout(wq, search_done != 0, HZ/5);
 }
 
-int esparser_queue(void *data) {
-	struct vdec_session *sess = data;
+static u32 esparser_vififo_free_space(struct vdec_session *sess)
+{
+	u32 vififo_usage;
+	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 	struct vdec_core *core = sess->core;
-	struct v4l2_m2m_buffer *buf, *n;
-	struct vdec_buffer *new_buf;
-	int ret;
 
-	for (;;) {
-		ret = wait_event_interruptible(sess->input_buf_wq, sess->input_bufs_ready == 1 || kthread_should_stop());
-		if (kthread_should_stop())
-			break;
+	vififo_usage  = vdec_ops->vififo_level(sess);
+	vififo_usage += readl_relaxed(core->esparser_base + PARSER_VIDEO_HOLE);
+	vififo_usage += (6 * SZ_1K);
 
-		if (ret == -EINTR)
-			continue;
-
-		sess->input_bufs_ready = 0;
-
-		v4l2_m2m_for_each_src_buf_safe(sess->m2m_ctx, buf, n) {
-			struct vb2_v4l2_buffer *vbuf = &buf->vb;
-			struct vb2_buffer *vb = &vbuf->vb2_buf;
-			v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);
-
-			while (down_timeout(&sess->queue_sema, HZ) < 0) {
-				if (kthread_should_stop()) {
-					v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
-					goto end;
-				}
-
-				printk("Timed out waiting for an input slot. Trying again..\n");
-			}
-
-			new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
-			new_buf->timestamp = vb->timestamp;
-			new_buf->index = -1;
-			add_buffer_to_list(sess, new_buf);
-
-			ret = esparser_process_buf(core, vbuf);
-
-			if (ret > 0) {
-				vbuf->flags = 0;
-				vbuf->field = V4L2_FIELD_NONE;
-				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
-			} else if (ret <= 0) {
-				printk("ESPARSER input parsing fatal error\n");
-				remove_buffer_from_list(sess, vb->timestamp);
-				v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
-				writel_relaxed(0, core->esparser_base + PARSER_FETCH_CMD);
-				up(&sess->queue_sema);
-			}
-		}
+	if (vififo_usage > sess->vififo_size) {
+		dev_warn(sess->core->dev_dec,
+			"VIFIFO usage (%u) > VIFIFO size (%u)\n",
+			vififo_usage, sess->vififo_size);
+		return 0;
 	}
 
-end:
+	return sess->vififo_size - vififo_usage;
+}
+
+int esparser_queue(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf)
+{
+	int ret;
+	struct vb2_buffer *vb = &vbuf->vb2_buf;
+	struct vdec_core *core = sess->core;
+
+	u32 payload_size = vb2_get_plane_payload(vb, 0);
+
+	ret = wait_event_interruptible_timeout(sess->vififo_wq,
+		esparser_vififo_free_space(sess) >= payload_size, HZ);
+	if (ret <= 0) {
+		u32 nb = v4l2_m2m_num_dst_bufs_ready(sess->m2m_ctx);
+		dev_err(core->dev_dec,
+		   "Timed out waiting for VIFIFO to free up:\n");
+		dev_err(core->dev_dec,
+		   "decoder stuck or not enough output buffers (%u) available\n", nb);
+		return -ENODEV;
+	}
+
+	v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);
+	vdec_add_buf_reorder(sess, vb->timestamp);
+
+	ret = esparser_process_buf(core, vb);
+
+	if (ret > 0) {
+		vbuf->flags = 0;
+		vbuf->field = V4L2_FIELD_NONE;
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
+	} else if (ret <= 0) {
+		printk("ESPARSER input parsing error\n");
+		vdec_remove_buf(sess, vb->timestamp);
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+		writel_relaxed(0, core->esparser_base + PARSER_FETCH_CMD);
+	}
+
 	return 0;
 }
 
-int esparser_power_up(struct vdec_session *sess) {
+int esparser_power_up(struct vdec_session *sess)
+{
 	struct vdec_core *core = sess->core;
 	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 
-	// WRITE_MPEG_REG(FEC_INPUT_CONTROL, 0);
 	writel_relaxed((10 << PS_CFG_PFIFO_EMPTY_CNT_BIT) |
 				(1  << PS_CFG_MAX_ES_WR_CYCLE_BIT) |
 				(16 << PS_CFG_MAX_FETCH_CYCLE_BIT),
@@ -232,7 +192,6 @@ int esparser_power_up(struct vdec_session *sess) {
 
 	writel_relaxed((ES_SEARCH | ES_PARSER_START), core->esparser_base + PARSER_CONTROL);
 
-	/* parser video */
 	writel_relaxed(sess->vififo_paddr, core->esparser_base + PARSER_VIDEO_START_PTR);
 	writel_relaxed(sess->vififo_paddr + sess->vififo_size - 8, core->esparser_base + PARSER_VIDEO_END_PTR);
 	writel_relaxed(readl_relaxed(core->esparser_base + PARSER_ES_CONTROL) & ~1, core->esparser_base + PARSER_ES_CONTROL);
@@ -246,7 +205,8 @@ int esparser_power_up(struct vdec_session *sess) {
 	return 0;
 }
 
-int esparser_init(struct platform_device *pdev, struct vdec_core *core) {
+int esparser_init(struct platform_device *pdev, struct vdec_core *core)
+{
 	int ret;
 	int irq;
 

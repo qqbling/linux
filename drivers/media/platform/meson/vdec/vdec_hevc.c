@@ -92,6 +92,12 @@ static void vdec_hevc_conf_esparser(struct vdec_session *sess)
 	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_FIFO_CTL) | (1 << 29), core->dos_base + HEVC_STREAM_FIFO_CTL);
 }
 
+static u32 vdec_hevc_vififo_level(struct vdec_session *sess)
+{
+	/* TODO */
+	return 0;
+}
+
 static int vdec_hevc_start(struct vdec_session *sess)
 {
 	int ret;
@@ -150,4 +156,5 @@ struct vdec_ops vdec_hevc_ops = {
 	.start = vdec_hevc_start,
 	.stop = vdec_hevc_stop,
 	.conf_esparser = vdec_hevc_conf_esparser,
+	.vififo_level = vdec_hevc_vififo_level,
 };

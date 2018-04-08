@@ -152,45 +152,11 @@ struct codec_hevc {
 
 static int codec_hevc_buffers_thread(void *data)
 {
-	struct vdec_buffer *tmp;
-	struct vb2_v4l2_buffer *vbuf;
-	unsigned long flags;
 	struct vdec_session *sess = data;
 	struct vdec_core *core = sess->core;
 
 	while (!kthread_should_stop()) {
 		printk("status: %08X ; level = %d ; d_si = %08X ; d_st = %08X; d_sc = %08X ; sfc = %08X\n", readl_relaxed(core->dos_base + HEVC_PARSER_INT_STATUS), readl_relaxed(core->dos_base + HEVC_STREAM_LEVEL), readl_relaxed(core->dos_base + HEVC_DECODE_SIZE), readl_relaxed(core->dos_base + DECODE_STOP_POS), readl_relaxed(core->dos_base + HEVC_STREAM_CONTROL), readl_relaxed(core->dos_base + HEVC_STREAM_FIFO_CTL));
-
-		/* The DONE part should probably be in a common thread */
-		spin_lock_irqsave(&sess->bufs_spinlock, flags);
-		while (!list_empty(&sess->bufs))
-		{
-			tmp = list_first_entry(&sess->bufs, struct vdec_buffer, list);
-			if (tmp->index == -1)
-				break;
-
-			vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx, tmp->index);
-			if (!vbuf) {
-				printk("HW buffer ready but we don't have the vb2 buffer !!!\n");
-				break;
-			}
-
-			vbuf->vb2_buf.planes[0].bytesused = vdec_get_output_size(sess);
-			vbuf->vb2_buf.planes[1].bytesused = vdec_get_output_size(sess) / 2;
-			vbuf->vb2_buf.timestamp = tmp->timestamp;
-			vbuf->sequence = sess->sequence_cap++;
-			if (!(vbuf->sequence % 100))
-				printk("%d\n", vbuf->sequence);
-
-			printk("Buffer %d done\n", tmp->index);
-
-			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
-
-			list_del(&tmp->list);
-
-			kfree(tmp);
-		}
-		spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 
 		msleep(100);
 	}

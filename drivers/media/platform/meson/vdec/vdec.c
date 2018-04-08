@@ -24,21 +24,28 @@
 #include "codec_h264.h"
 #include "codec_hevc.h"
 
-static void vdec_abort(struct vdec_session *sess) {
+/* 16 MiB for parsed bitstream swap exchange */
+#define SIZE_VIFIFO (16 * SZ_1M)
+
+static void vdec_abort(struct vdec_session *sess)
+{
 	printk("Aborting decoding session!\n");
 	vb2_queue_error(&sess->m2m_ctx->cap_q_ctx.q);
 	vb2_queue_error(&sess->m2m_ctx->out_q_ctx.q);
 }
 
-static u32 get_output_size(u32 width, u32 height) {
+static u32 get_output_size(u32 width, u32 height)
+{
 	return ALIGN(width, 64) * ALIGN(height, 64);
 }
 
-u32 vdec_get_output_size(struct vdec_session *sess) {
+u32 vdec_get_output_size(struct vdec_session *sess)
+{
 	return get_output_size(sess->width, sess->height);
 }
 
-static int vdec_poweron(struct vdec_session *sess) {
+static int vdec_poweron(struct vdec_session *sess)
+{
 	int ret;
 	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 
@@ -57,25 +64,38 @@ static void vdec_poweroff(struct vdec_session *sess) {
 	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
 
-	kthread_stop(sess->esparser_queue_thread);
-
 	codec_ops->stop(sess);
 	vdec_ops->stop(sess);
 }
 
-void vdec_m2m_device_run(void *priv) {
+static void vdec_queue_recycle(struct vdec_session *sess, struct vb2_buffer *vb)
+{
+	struct vdec_buffer *new_buf;
+
+	new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
+	new_buf->index = vb->index;
+
+	mutex_lock(&sess->bufs_recycle_lock);
+	list_add_tail(&new_buf->list, &sess->bufs_recycle);
+	mutex_unlock(&sess->bufs_recycle_lock);
+}
+
+void vdec_m2m_device_run(void *priv)
+{
+	struct v4l2_m2m_buffer *buf, *n;
 	struct vdec_session *sess = priv;
 
 	printk("vdec_m2m_device_run\n");
 	mutex_lock(&sess->lock);
-
-	sess->input_bufs_ready = 1;
-	wake_up_interruptible(&sess->input_buf_wq);
-
+	v4l2_m2m_for_each_src_buf_safe(sess->m2m_ctx, buf, n) {
+		if (esparser_queue(sess, &buf->vb) < 0)
+			vdec_abort(sess);
+	}
 	mutex_unlock(&sess->lock);
 }
 
-void vdec_m2m_job_abort(void *priv) {
+void vdec_m2m_job_abort(void *priv)
+{
 	struct vdec_session *sess = priv;
 
 	printk("vdec_m2m_job_abort\n");
@@ -92,8 +112,8 @@ static int vdec_queue_setup(struct vb2_queue *q,
 		unsigned int sizes[], struct device *alloc_devs[])
 {
 	struct vdec_session *sess = vb2_get_drv_priv(q);
-	struct vdec_format *fmt_out = sess->fmt_out;
-	struct vdec_format *fmt_cap = sess->fmt_cap;
+	const struct vdec_format *fmt_out = sess->fmt_out;
+	const struct vdec_format *fmt_cap = sess->fmt_cap;
 	printk("vdec_queue_setup\n");
 	
 	switch (q->type) {
@@ -105,26 +125,14 @@ static int vdec_queue_setup(struct vb2_queue *q,
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
 		sizes[0] = vdec_get_output_size(sess);
 		sizes[1] = vdec_get_output_size(sess) / 2;
+		*num_planes = fmt_cap->num_planes;
 		*num_buffers = min(max(*num_buffers, fmt_out->min_buffers), fmt_out->max_buffers);
 		sess->num_output_bufs = *num_buffers;
-		*num_planes = fmt_cap->num_planes;
 		break;
 	default:
 		return -EINVAL;
 	}
 	return 0;
-}
-
-static void vdec_queue_recycle(struct vdec_session *sess, struct vb2_buffer *vb)
-{
-	struct vdec_buffer *new_buf;
-
-	new_buf = kmalloc(sizeof(struct vdec_buffer), GFP_KERNEL);
-	new_buf->index = vb->index;
-
-	mutex_lock(&sess->bufs_recycle_lock);
-	list_add_tail(&new_buf->list, &sess->bufs_recycle);
-	mutex_unlock(&sess->bufs_recycle_lock);
 }
 
 static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
@@ -140,8 +148,8 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 		goto unlock;
 	
 	if (vb->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
-		sess->input_bufs_ready = 1;
-		wake_up_interruptible(&sess->input_buf_wq);
+		if (esparser_queue(sess, vbuf) < 0)
+			vdec_abort(sess);
 	}
 	else
 		vdec_queue_recycle(sess, vb);
@@ -167,16 +175,14 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 		mutex_unlock(&sess->lock);
 		return 0;
 	}
-	
-	/* Allocate 32 MiB for the VIFIFO buffer */
-	sess->vififo_size = 0x2000000;
+
+	sess->vififo_size = SIZE_VIFIFO;
 	sess->vififo_vaddr = dma_alloc_coherent(sess->core->dev, sess->vififo_size, &sess->vififo_paddr, GFP_KERNEL);
 	if (!sess->vififo_vaddr) {
-		printk("Failed to request 32MiB VIFIFO buffer\n");
+		printk("Failed to request VIFIFO buffer\n");
 		ret = -ENOMEM;
 		goto bufs_done;
 	}
-	printk("Allocated 32MiB: %08X - %08X\n", sess->vififo_paddr, sess->vififo_paddr + sess->vififo_size);
 
 	pm_runtime_get_sync(sess->core->dev_dec);
 	ret = vdec_poweron(sess);
@@ -185,8 +191,6 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 
 	sess->sequence_cap = 0;
 
-	printk("Launching thread\n");
-	sess->esparser_queue_thread = kthread_run(esparser_queue, sess, "esparser_queue");
 	printk("start_streaming done\n");
 	mutex_unlock(&sess->lock);
 
@@ -217,8 +221,6 @@ void vdec_stop_streaming(struct vb2_queue *q)
 		dma_free_coherent(sess->core->dev, sess->vififo_size, sess->vififo_vaddr, sess->vififo_paddr);
 		INIT_LIST_HEAD(&sess->bufs);
 		INIT_LIST_HEAD(&sess->bufs_recycle);
-		sema_init(&sess->queue_sema, 24);
-		sess->input_bufs_ready = 0;
 	}
 
 	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
@@ -238,8 +240,6 @@ void vdec_stop_streaming(struct vb2_queue *q)
 
 static const struct vb2_ops vdec_vb2_ops = {
 	.queue_setup = vdec_queue_setup,
-	/*.buf_init = vdec_vb2_buf_init,
-	.buf_prepare = vdec_vb2_buf_prepare,*/
 	.start_streaming = vdec_start_streaming,
 	.stop_streaming = vdec_stop_streaming,
 	.buf_queue = vdec_vb2_buf_queue,
@@ -644,11 +644,10 @@ static int vdec_open(struct file *file)
 	sess->height = 720;
 	INIT_LIST_HEAD(&sess->bufs);
 	INIT_LIST_HEAD(&sess->bufs_recycle);
-	init_waitqueue_head(&sess->input_buf_wq);
+	init_waitqueue_head(&sess->vififo_wq);
 	spin_lock_init(&sess->bufs_spinlock);
 	mutex_init(&sess->lock);
 	mutex_init(&sess->bufs_recycle_lock);
-	sema_init(&sess->queue_sema, 24);
 
 	core->cur_sess = sess;
 
@@ -686,6 +685,95 @@ static int vdec_close(struct file *file)
 	kfree(sess);
 
 	return 0;
+}
+
+void vdec_dst_buf_done(struct vdec_session *sess, u32 buf_idx)
+{
+	unsigned long flags;
+	struct vdec_buffer *tmp;
+	struct vb2_v4l2_buffer *vbuf;
+	struct device *dev = sess->core->dev_dec;
+
+	spin_lock_irqsave(&sess->bufs_spinlock, flags);
+	if (list_empty(&sess->bufs)) {
+		dev_err(dev, "Buffer %u done but list is empty\n", buf_idx);
+		vdec_abort(sess);
+		goto unlock;
+	}
+
+	tmp = list_first_entry(&sess->bufs, struct vdec_buffer, list);
+
+	vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx, buf_idx);
+	if (!vbuf) {
+		dev_err(dev, "Buffer %u done but it doesn't exist in m2m_ctx\n",
+			buf_idx);
+		vdec_abort(sess);
+		goto unlock;
+	}
+
+	vbuf->vb2_buf.planes[0].bytesused = vdec_get_output_size(sess);
+	vbuf->vb2_buf.planes[1].bytesused = vdec_get_output_size(sess) / 2;
+	vbuf->vb2_buf.timestamp = tmp->timestamp;
+	vbuf->sequence = sess->sequence_cap++;
+
+	v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
+	list_del(&tmp->list);
+	kfree(tmp);
+
+unlock:
+	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
+
+	/* Buffer done probably means the vififo got freed */
+	wake_up_interruptible(&sess->vififo_wq);
+}
+
+/* Userspace will often queue input buffers that are not
+ * in chronological order. Rearrange them here.
+ */
+void vdec_add_buf_reorder(struct vdec_session *sess, u64 ts)
+{
+	struct vdec_buffer *new_buf, *tmp;
+	unsigned long flags;
+
+	new_buf = kmalloc(sizeof(*new_buf), GFP_KERNEL);
+	new_buf->timestamp = ts;
+	new_buf->index = -1;
+
+	spin_lock_irqsave(&sess->bufs_spinlock, flags);
+	if (list_empty(&sess->bufs))
+		goto add_core;
+
+	list_for_each_entry(tmp, &sess->bufs, list) {
+		if (ts < tmp->timestamp) {
+			list_add_tail(&new_buf->list, &tmp->list);
+			goto unlock;
+		}
+	}
+
+add_core:
+	list_add_tail(&new_buf->list, &sess->bufs);
+unlock:
+	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
+}
+
+void vdec_remove_buf(struct vdec_session *sess, u64 ts)
+{
+	struct vdec_buffer *tmp;
+	unsigned long flags;
+
+	spin_lock_irqsave(&sess->bufs_spinlock, flags);
+	list_for_each_entry(tmp, &sess->bufs, list) {
+		if (tmp->timestamp == ts) {
+			list_del(&tmp->list);
+			kfree(tmp);
+			goto unlock;
+		}
+	}
+	dev_warn(sess->core->dev_dec,
+		"Couldn't remove buffer with timestamp %llu from list\n", ts);
+
+unlock:
+	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 }
 
 static const struct v4l2_file_operations vdec_fops = {

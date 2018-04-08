@@ -40,8 +40,6 @@ struct codec_mpeg4 {
 	void      *workspace_vaddr;
 	dma_addr_t workspace_paddr;
 
-	u32 last_buf_idx;
-
 	/* Housekeeping thread for marking buffers to DONE
 	 * and recycling them into the hardware
 	 */
@@ -51,39 +49,10 @@ struct codec_mpeg4 {
 static int codec_mpeg4_buffers_thread(void *data)
 {
 	struct vdec_buffer *tmp;
-	struct vb2_v4l2_buffer *vbuf;
-	unsigned long flags;
 	struct vdec_session *sess = data;
 	struct vdec_core *core = sess->core;;
 
 	while (!kthread_should_stop()) {
-		spin_lock_irqsave(&sess->bufs_spinlock, flags);
-		while (!list_empty(&sess->bufs))
-		{
-			tmp = list_first_entry(&sess->bufs, struct vdec_buffer, list);
-			if (tmp->index == -1)
-				break;
-
-			vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx, tmp->index);
-			if (!vbuf) {
-				printk("HW buffer %d ready but we don't have the vb2 buffer !!!\n", tmp->index);
-				break;
-			}
-
-			vbuf->vb2_buf.planes[0].bytesused = vdec_get_output_size(sess);
-			vbuf->vb2_buf.planes[1].bytesused = vdec_get_output_size(sess) / 2;
-			vbuf->vb2_buf.timestamp = tmp->timestamp;
-			vbuf->sequence = sess->sequence_cap++;
-			if (!(vbuf->sequence % 100))
-				printk("%d\n", vbuf->sequence);
-
-			printk("Buffer %d done\n", tmp->index);
-			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
-			list_del(&tmp->list);
-			kfree(tmp);
-		}
-		spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
-
 		mutex_lock(&sess->bufs_recycle_lock);
 		while (!list_empty(&sess->bufs_recycle) &&
 		       !readl_relaxed(core->dos_base + MREG_BUFFERIN))
@@ -97,8 +66,6 @@ static int codec_mpeg4_buffers_thread(void *data)
 
 			list_del(&tmp->list);
 			kfree(tmp);
-
-			up(&sess->queue_sema);
 		}
 		mutex_unlock(&sess->bufs_recycle_lock);
 
@@ -158,10 +125,10 @@ static int codec_mpeg4_start(struct vdec_session *sess) {
 
 	sess->priv = mpeg4;
 
-	/* Allocate some memory for the MPEG1/2 decoder's state */
+	/* Allocate some memory for the MPEG4 decoder's state */
 	mpeg4->workspace_vaddr = dma_alloc_coherent(core->dev, SIZE_WORKSPACE, &mpeg4->workspace_paddr, GFP_KERNEL);
 	if (!mpeg4->workspace_vaddr) {
-		printk("Failed to request MPEG 4 Workspace\n");
+		printk("Failed to request MPEG4 Workspace\n");
 		ret = -ENOMEM;
 		goto free_mpeg4;
 	}
@@ -187,7 +154,6 @@ static int codec_mpeg4_start(struct vdec_session *sess) {
 	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) | (1 << 17), core->dos_base + MDEC_PIC_DC_CTRL);
 
 	mpeg4->buffers_thread = kthread_run(codec_mpeg4_buffers_thread, sess, "buffers_done");
-	mpeg4->last_buf_idx = 7;
 
 	return 0;
 
@@ -231,7 +197,7 @@ static irqreturn_t codec_mpeg4_isr(struct vdec_session *sess)
 	reg = readl_relaxed(core->dos_base + MREG_BUFFEROUT);
 	if (reg) {
 		buffer_index = reg & 0x7;
-		codec_helper_fill_buf_idx(sess, buffer_index);
+		vdec_dst_buf_done(sess, buffer_index);
 		writel_relaxed(0, core->dos_base + MREG_BUFFEROUT);
 	}
 

@@ -54,6 +54,7 @@ struct vdec_ops {
 	int (*start)(struct vdec_session *sess);
 	int (*stop)(struct vdec_session *sess);
 	void (*conf_esparser)(struct vdec_session *sess);
+	u32 (*vififo_level)(struct vdec_session *sess);
 };
 
 /* Describes one of the compression standard supported (H.264, HEVC..) */
@@ -106,10 +107,7 @@ struct vdec_session {
 	unsigned int sequence_cap;
 
 	/* ESPARSER Input buffer management */
-	struct task_struct *esparser_queue_thread;
-	struct semaphore queue_sema;
-	u32 input_bufs_ready;
-	wait_queue_head_t input_buf_wq;
+	wait_queue_head_t vififo_wq;
 
 	/* Big contiguous area for the VIFIFO */
 	void *vififo_vaddr;
@@ -128,5 +126,8 @@ struct vdec_session {
 };
 
 u32 vdec_get_output_size(struct vdec_session *sess);
+void vdec_dst_buf_done(struct vdec_session *sess, u32 buf_idx);
+void vdec_add_buf_reorder(struct vdec_session *sess, u64 ts);
+void vdec_remove_buf(struct vdec_session *sess, u64 ts);
 
 #endif

@@ -47,6 +47,7 @@
 	#define MEM_CTRL_FILL_EN	BIT(1)
 #define VLD_MEM_VIFIFO_WP 0x3114
 #define VLD_MEM_VIFIFO_RP 0x3118
+#define VLD_MEM_VIFIFO_LEVEL 0x311c
 #define VLD_MEM_VIFIFO_BUF_CNTL 0x3120
 	#define MEM_BUFCTRL_MANUAL	BIT(1)
 #define VLD_MEM_VIFIFO_WRAP_COUNT 0x3144
@@ -150,6 +151,13 @@ static void vdec_1_conf_esparser(struct vdec_session *sess)
 	writel_relaxed(readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL) & ~1, core->dos_base + VLD_MEM_VIFIFO_BUF_CNTL);
 }
 
+static u32 vdec_1_vififo_level(struct vdec_session *sess)
+{
+	struct vdec_core *core = sess->core;
+
+	return readl_relaxed(core->dos_base + VLD_MEM_VIFIFO_LEVEL);
+}
+
 static int vdec_1_start(struct vdec_session *sess)
 {
 	int ret;
@@ -233,4 +241,5 @@ struct vdec_ops vdec_1_ops = {
 	.start = vdec_1_start,
 	.stop = vdec_1_stop,
 	.conf_esparser = vdec_1_conf_esparser,
+	.vififo_level = vdec_1_vififo_level,
 };

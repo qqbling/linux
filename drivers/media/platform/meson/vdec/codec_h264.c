@@ -78,40 +78,10 @@ struct codec_h264 {
 static int codec_h264_buffers_thread(void *data)
 {
 	struct vdec_buffer *tmp;
-	struct vb2_v4l2_buffer *vbuf;
-	unsigned long flags;
 	struct vdec_session *sess = data;
 	struct vdec_core *core = sess->core;;
 
 	while (!kthread_should_stop()) {
-		spin_lock_irqsave(&sess->bufs_spinlock, flags);
-		while (!list_empty(&sess->bufs))
-		{
-			tmp = list_first_entry(&sess->bufs, struct vdec_buffer, list);
-			if (tmp->index == -1)
-				break;
-
-			vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx, tmp->index);
-			if (!vbuf) {
-				printk("HW buffer ready but we don't have the vb2 buffer !!!\n");
-				break;
-			}
-
-			vbuf->vb2_buf.planes[0].bytesused = vdec_get_output_size(sess);
-			vbuf->vb2_buf.planes[1].bytesused = vdec_get_output_size(sess) / 2;
-			vbuf->vb2_buf.timestamp = tmp->timestamp;
-			vbuf->sequence = sess->sequence_cap++;
-			if (!(vbuf->sequence % 100))
-				printk("%d\n", vbuf->sequence);
-				
-			printk("Buffer %d done\n", tmp->index);
-
-			v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
-			list_del(&tmp->list);
-			kfree(tmp);
-		}
-		spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
-
 		mutex_lock(&sess->bufs_recycle_lock);
 		while (!list_empty(&sess->bufs_recycle) &&
 		      (!readl_relaxed(core->dos_base + AV_SCRATCH_7) ||
@@ -131,8 +101,6 @@ static int codec_h264_buffers_thread(void *data)
 
 			list_del(&tmp->list);
 			kfree(tmp);
-
-			up(&sess->queue_sema);
 		}
 		mutex_unlock(&sess->bufs_recycle_lock);
 
@@ -392,7 +360,7 @@ static irqreturn_t codec_h264_isr(struct vdec_session *sess)
 				continue;
 			}
 
-			codec_helper_fill_buf_idx(sess, buffer_index);
+			vdec_dst_buf_done(sess, buffer_index);
 		}
 
 		writel_relaxed(0, core->dos_base + AV_SCRATCH_0);

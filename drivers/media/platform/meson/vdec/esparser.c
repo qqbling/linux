@@ -99,6 +99,12 @@ static int esparser_process_buf(struct vdec_core *core, struct vb2_buffer *vb)
 
 	esparser_append_start_code(vb);
 
+	/* Throwing in buffers too quickly (100+ fps) will unfortunately result
+	 * in random decode errors. There doesn't seem to be any way
+	 * to predict this.
+	 * This delay still permits ~100fps decoding
+	 */
+	//usleep_range(5000, 10000);
 	writel_relaxed(0, core->esparser_base + PFIFO_RD_PTR);
 	writel_relaxed(0, core->esparser_base + PFIFO_WR_PTR);
 	writel_relaxed(ES_WRITE | ES_PARSER_START | ES_SEARCH | (payload_size << ES_PACK_SIZE_BIT), core->esparser_base + PARSER_CONTROL);
@@ -130,24 +136,15 @@ static u32 esparser_vififo_free_space(struct vdec_session *sess)
 	return sess->vififo_size - vififo_usage;
 }
 
-int esparser_queue(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf)
+static int esparser_queue(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 {
 	int ret;
 	struct vb2_buffer *vb = &vbuf->vb2_buf;
 	struct vdec_core *core = sess->core;
-
 	u32 payload_size = vb2_get_plane_payload(vb, 0);
 
-	ret = wait_event_interruptible_timeout(sess->vififo_wq,
-		esparser_vififo_free_space(sess) >= payload_size, HZ);
-	if (ret <= 0) {
-		u32 nb = v4l2_m2m_num_dst_bufs_ready(sess->m2m_ctx);
-		dev_err(core->dev_dec,
-		   "Timed out waiting for VIFIFO to free up:\n");
-		dev_err(core->dev_dec,
-		   "decoder stuck or not enough output buffers (%u) available\n", nb);
-		return -ENODEV;
-	}
+	if (esparser_vififo_free_space(sess) < payload_size)
+		return -EAGAIN;
 
 	v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);
 	vdec_add_buf_reorder(sess, vb->timestamp);
@@ -166,6 +163,18 @@ int esparser_queue(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 	}
 
 	return 0;
+}
+
+void esparser_queue_all_src(struct work_struct *work)
+{
+	struct v4l2_m2m_buffer *buf, *n;
+	struct vdec_session *sess =
+		container_of(work, struct vdec_session, esparser_queue_work);
+
+	v4l2_m2m_for_each_src_buf_safe(sess->m2m_ctx, buf, n) {
+		if (esparser_queue(sess, &buf->vb) < 0)
+			break;
+	}
 }
 
 int esparser_power_up(struct vdec_session *sess)

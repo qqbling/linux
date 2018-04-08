@@ -100,14 +100,14 @@ struct vdec_session {
 	u32 num_input_bufs;
 	u32 num_output_bufs;
 
+	/* Work for the ESPARSER to process src buffers */
+	struct work_struct esparser_queue_work;
+
 	/* Whether capture/output streaming are on */
 	unsigned int streamon_cap, streamon_out;
 	
 	/* Capture sequence counter */
 	unsigned int sequence_cap;
-
-	/* ESPARSER Input buffer management */
-	wait_queue_head_t vififo_wq;
 
 	/* Big contiguous area for the VIFIFO */
 	void *vififo_vaddr;

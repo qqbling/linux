@@ -79,7 +79,7 @@ static int codec_h264_buffers_thread(void *data)
 {
 	struct vdec_buffer *tmp;
 	struct vdec_session *sess = data;
-	struct vdec_core *core = sess->core;;
+	struct vdec_core *core = sess->core;
 
 	while (!kthread_should_stop()) {
 		mutex_lock(&sess->bufs_recycle_lock);

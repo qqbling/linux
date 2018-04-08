@@ -82,16 +82,10 @@ static void vdec_queue_recycle(struct vdec_session *sess, struct vb2_buffer *vb)
 
 void vdec_m2m_device_run(void *priv)
 {
-	struct v4l2_m2m_buffer *buf, *n;
 	struct vdec_session *sess = priv;
 
 	printk("vdec_m2m_device_run\n");
-	mutex_lock(&sess->lock);
-	v4l2_m2m_for_each_src_buf_safe(sess->m2m_ctx, buf, n) {
-		if (esparser_queue(sess, &buf->vb) < 0)
-			vdec_abort(sess);
-	}
-	mutex_unlock(&sess->lock);
+	schedule_work(&sess->esparser_queue_work);
 }
 
 void vdec_m2m_job_abort(void *priv)
@@ -148,10 +142,8 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 		goto unlock;
 	
 	if (vb->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
-		if (esparser_queue(sess, vbuf) < 0)
-			vdec_abort(sess);
-	}
-	else
+		schedule_work(&sess->esparser_queue_work);
+	} else
 		vdec_queue_recycle(sess, vb);
 
 unlock:
@@ -644,7 +636,7 @@ static int vdec_open(struct file *file)
 	sess->height = 720;
 	INIT_LIST_HEAD(&sess->bufs);
 	INIT_LIST_HEAD(&sess->bufs_recycle);
-	init_waitqueue_head(&sess->vififo_wq);
+	INIT_WORK(&sess->esparser_queue_work, esparser_queue_all_src);
 	spin_lock_init(&sess->bufs_spinlock);
 	mutex_init(&sess->lock);
 	mutex_init(&sess->bufs_recycle_lock);
@@ -724,7 +716,7 @@ unlock:
 	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 
 	/* Buffer done probably means the vififo got freed */
-	wake_up_interruptible(&sess->vififo_wq);
+	schedule_work(&sess->esparser_queue_work);
 }
 
 /* Userspace will often queue input buffers that are not

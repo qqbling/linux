@@ -876,7 +876,7 @@ err_vdev_release:
 
 static int vdec_remove(struct platform_device *pdev)
 {
-	struct vdec_core *core = dev_get_drvdata(pdev->dev.parent);
+	struct vdec_core *core = platform_get_drvdata(pdev);
 
 	video_unregister_device(core->vdev_dec);
 

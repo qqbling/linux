@@ -36,7 +36,7 @@ static void vdec_abort(struct vdec_session *sess)
 
 static u32 get_output_size(u32 width, u32 height)
 {
-	return ALIGN(width, 64) * ALIGN(height, 64);
+	return ALIGN(width * height, 64 * SZ_1K);
 }
 
 u32 vdec_get_output_size(struct vdec_session *sess)
@@ -266,11 +266,11 @@ static const struct vdec_format vdec_formats[] = {
 		.pixfmt = V4L2_PIX_FMT_HEVC,
 		.num_planes = 1,
 		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 8,
-		.max_buffers = 32,
+		.min_buffers = 16,
+		.max_buffers = 16,
 		.vdec_ops = &vdec_hevc_ops,
 		.codec_ops = &codec_hevc_ops,
-		.firmware_path = "meson/gxl/vh265_mc_mmu",
+		.firmware_path = "meson/gxl/vh265_mc",
 	}, {
 		.pixfmt = V4L2_PIX_FMT_MPEG1,
 		.num_planes = 1,

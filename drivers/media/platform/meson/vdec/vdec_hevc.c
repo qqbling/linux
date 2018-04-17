@@ -80,13 +80,15 @@ static void vdec_hevc_stbuf_init(struct vdec_session *sess)
 	printk("vdec_hevc_stbuf_init end\n");
 }
 
+/* VDEC_HEVC specific ESPARSER configuration */
 static void vdec_hevc_conf_esparser(struct vdec_session *sess)
 {
 	struct vdec_core *core = sess->core;
 
 	printk("vdec_hevc_conf_esparser\n");
-	/* VDEC_HEVC specific ESPARSER stuff */
-	writel_relaxed(3 << 1, core->dos_base + DOS_GEN_CTRL0); // set vififo_vbuf_rp_sel=>vdec_hevc
+
+	/* set vififo_vbuf_rp_sel=>vdec_hevc */
+	writel_relaxed(3 << 1, core->dos_base + DOS_GEN_CTRL0);
 	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_CONTROL) | (1 << 3), core->dos_base + HEVC_STREAM_CONTROL);
 	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_CONTROL) | 1, core->dos_base + HEVC_STREAM_CONTROL);
 	writel_relaxed(readl_relaxed(core->dos_base + HEVC_STREAM_FIFO_CTL) | (1 << 29), core->dos_base + HEVC_STREAM_FIFO_CTL);
@@ -126,12 +128,6 @@ static int vdec_hevc_start(struct vdec_session *sess)
 		return ret;
 
 	codec_ops->start(sess);
-
-	writel_relaxed((1<<12)|(1<<11), core->dos_base + DOS_SW_RESET3);
-	writel_relaxed(0, core->dos_base + DOS_SW_RESET3);
-	readl_relaxed(core->dos_base + DOS_SW_RESET3);
-
-	writel_relaxed(1, core->dos_base + HEVC_MPSR);
 
 	printk("vdec_hevc_start end\n");
 

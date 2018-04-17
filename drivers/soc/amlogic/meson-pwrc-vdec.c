@@ -17,6 +17,7 @@
 /* AO Offsets */
 #define AO_RTI_GEN_PWR_SLEEP0 (0x3a << 2)
 
+//#define GEN_PWR_VDEC_1 (BIT(7) | BIT(6))
 #define GEN_PWR_VDEC_1 (BIT(3) | BIT(2))
 
 struct meson_pwrc_vdec {
@@ -25,6 +26,7 @@ struct meson_pwrc_vdec {
 	struct clk *dos_parser_clk;
 	struct clk *vpu_intr_clk;
 	struct clk *vdec_1_clk;
+	struct clk *vdec_hevc_clk;
 };
 
 static inline
@@ -45,6 +47,7 @@ static int meson_pwrc_vdec_power_off(struct generic_pm_domain *genpd)
 	//clk_disable_unprepare(pd->vpu_intr_clk);
 	clk_disable_unprepare(pd->dos_parser_clk);
 	clk_disable_unprepare(pd->vdec_1_clk);
+	//clk_disable_unprepare(pd->vdec_hevc_clk);
 
 	return 0;
 }
@@ -54,6 +57,7 @@ static int meson_pwrc_vdec_setup_clk(struct meson_pwrc_vdec *pd) {
 	clk_prepare_enable(pd->dos_parser_clk);
 	//clk_prepare_enable(pd->vpu_intr_clk);
 	clk_prepare_enable(pd->vdec_1_clk);
+	//clk_prepare_enable(pd->vdec_hevc_clk);
 
 	return 0;
 }
@@ -104,6 +108,7 @@ static int meson_pwrc_vdec_probe(struct platform_device *pdev)
 	vdec_pd.vpu_intr_clk = devm_clk_get(&pdev->dev, "vpu_intr");
 	vdec_pd.dos_parser_clk = devm_clk_get(&pdev->dev, "dos_parser");
 	vdec_pd.vdec_1_clk = devm_clk_get(&pdev->dev, "vdec_1");
+	vdec_pd.vdec_hevc_clk = devm_clk_get(&pdev->dev, "vdec_hevc");
 	vdec_pd.regmap_ao = regmap_ao;
 
 	powered_off = meson_pwrc_vdec_get_power(&vdec_pd);

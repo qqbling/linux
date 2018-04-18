@@ -854,7 +854,7 @@ static void codec_hevc_set_sao(struct vdec_session *sess, struct hevc_frame *fra
 	u32 slice_deblocking_filter_disabled_flag;
 	u32 val, val_2;
 
-	val = (readl_relaxed(core->dos_base + HEVC_SAO_CTRL0) & 0xf) | ilog2(hevc->lcu_size);
+	val = (readl_relaxed(core->dos_base + HEVC_SAO_CTRL0) & ~0xf) | ilog2(hevc->lcu_size);
 	writel_relaxed(val, core->dos_base + HEVC_SAO_CTRL0);
 
 	writel_relaxed(sess->width | (sess->height << 16), core->dos_base + HEVC_SAO_PIC_SIZE);

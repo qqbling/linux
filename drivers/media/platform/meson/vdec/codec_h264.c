@@ -1,3 +1,17 @@
+/*
+ * Copyright (C) 2018 Maxime Jourdan <maxi.jourdan@wanadoo.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
+
 #include <media/v4l2-mem2mem.h>
 #include <media/videobuf2-dma-contig.h>
 
@@ -13,7 +27,6 @@
  * from the workspace paddr
  */
 #define DEF_BUF_START_ADDR 0x1000000
-
 
 /* DOS registers */
 #define ASSIST_MBOX1_CLR_REG 0x01d4
@@ -360,7 +373,7 @@ static irqreturn_t codec_h264_isr(struct vdec_session *sess)
 				continue;
 			}
 
-			vdec_dst_buf_done(sess, buffer_index);
+			vdec_dst_buf_done_idx(sess, buffer_index);
 		}
 
 		writel_relaxed(0, core->dos_base + AV_SCRATCH_0);

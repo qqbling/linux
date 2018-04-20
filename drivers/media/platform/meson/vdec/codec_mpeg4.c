@@ -1,3 +1,17 @@
+/*
+ * Copyright (C) 2018 Maxime Jourdan <maxi.jourdan@wanadoo.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
+
 #include <media/v4l2-mem2mem.h>
 #include <media/videobuf2-dma-contig.h>
 
@@ -197,7 +211,7 @@ static irqreturn_t codec_mpeg4_isr(struct vdec_session *sess)
 	reg = readl_relaxed(core->dos_base + MREG_BUFFEROUT);
 	if (reg) {
 		buffer_index = reg & 0x7;
-		vdec_dst_buf_done(sess, buffer_index);
+		vdec_dst_buf_done_idx(sess, buffer_index);
 		writel_relaxed(0, core->dos_base + MREG_BUFFEROUT);
 	}
 

@@ -1,3 +1,4 @@
+#include <linux/of_device.h>
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/module.h>
@@ -17,12 +18,6 @@
 #include "canvas.h"
 
 #include "vdec_1.h"
-#include "vdec_hevc.h"
-
-#include "codec_mpeg12.h"
-#include "codec_mpeg4.h"
-#include "codec_h264.h"
-#include "codec_hevc.h"
 
 /* 16 MiB for parsed bitstream swap exchange */
 #define SIZE_VIFIFO (16 * SZ_1M)
@@ -248,106 +243,32 @@ vdec_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 	return 0;
 }
 
-static const struct vdec_format vdec_formats[] = {
-	{
-		.pixfmt = V4L2_PIX_FMT_NV12M,
-		.num_planes = 2,
-		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
-	}, {
-		.pixfmt = V4L2_PIX_FMT_H264,
-		.num_planes = 1,
-		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 16,
-		.max_buffers = 32,
-		.vdec_ops = &vdec_1_ops,
-		.codec_ops = &codec_h264_ops,
-		.firmware_path = "meson/gxl/gxtvbb_vh264_mc",
-	}, {
-		.pixfmt = V4L2_PIX_FMT_HEVC,
-		.num_planes = 1,
-		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 16,
-		.max_buffers = 16,
-		.vdec_ops = &vdec_hevc_ops,
-		.codec_ops = &codec_hevc_ops,
-		.firmware_path = "meson/gxl/vh265_mc",
-	}, {
-		.pixfmt = V4L2_PIX_FMT_MPEG1,
-		.num_planes = 1,
-		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 8,
-		.max_buffers = 8,
-		.vdec_ops = &vdec_1_ops,
-		.codec_ops = &codec_mpeg12_ops,
-		.firmware_path = "meson/gxl/vmpeg12_mc",
-	}, {
-		.pixfmt = V4L2_PIX_FMT_MPEG2,
-		.num_planes = 1,
-		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 8,
-		.max_buffers = 8,
-		.vdec_ops = &vdec_1_ops,
-		.codec_ops = &codec_mpeg12_ops,
-		.firmware_path = "meson/gxl/vmpeg12_mc",
-	}, {
-		.pixfmt = V4L2_PIX_FMT_MPEG4,
-		.num_planes = 1,
-		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 8,
-		.max_buffers = 8,
-		.vdec_ops = &vdec_1_ops,
-		.codec_ops = &codec_mpeg4_ops,
-		.firmware_path = "meson/gxl/vmpeg4_mc_5",
-	}, {
-		.pixfmt = V4L2_PIX_FMT_H263,
-		.num_planes = 1,
-		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 8,
-		.max_buffers = 8,
-		.vdec_ops = &vdec_1_ops,
-		.codec_ops = &codec_mpeg4_ops,
-		.firmware_path = "meson/gxl/h263_mc",
-	}, {
-		.pixfmt = V4L2_PIX_FMT_XVID,
-		.num_planes = 1,
-		.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-		.min_buffers = 8,
-		.max_buffers = 8,
-		.vdec_ops = &vdec_1_ops,
-		.codec_ops = &codec_mpeg4_ops,
-		.firmware_path = "meson/gxl/vmpeg4_mc_5",
-	},
-};
-
-static const struct vdec_format * find_format(u32 pixfmt, u32 type)
+static const struct vdec_format *
+find_format(const struct vdec_format *fmts, u32 size, u32 pixfmt, u32 type)
 {
-	const struct vdec_format *fmt = vdec_formats;
-	unsigned int size = ARRAY_SIZE(vdec_formats);
 	unsigned int i;
 
 	for (i = 0; i < size; i++) {
-		if (fmt[i].pixfmt == pixfmt)
+		if (fmts[i].pixfmt == pixfmt)
 			break;
 	}
 
-	if (i == size || fmt[i].type != type)
+	if (i == size || fmts[i].type != type)
 		return NULL;
 
-	return &fmt[i];
+	return &fmts[i];
 }
 
 static const struct vdec_format *
-find_format_by_index(unsigned int index, u32 type)
+find_format_by_index(const struct vdec_format *fmts, u32 size, u32 index, u32 type)
 {
-	const struct vdec_format *fmt = vdec_formats;
-	unsigned int size = ARRAY_SIZE(vdec_formats);
 	unsigned int i, k = 0;
 
 	if (index > size)
 		return NULL;
 
 	for (i = 0; i < size; i++) {
-		if (fmt[i].type != type)
+		if (fmts[i].type != type)
 			continue;
 		if (k == index)
 			break;
@@ -357,11 +278,11 @@ find_format_by_index(unsigned int index, u32 type)
 	if (i == size)
 		return NULL;
 
-	return &fmt[i];
+	return &fmts[i];
 }
 
 static const struct vdec_format *
-vdec_try_fmt_common(struct v4l2_format *f)
+vdec_try_fmt_common(const struct vdec_format *fmts, u32 size, struct v4l2_format *f)
 {
 	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
 	struct v4l2_plane_pix_format *pfmt = pixmp->plane_fmt;
@@ -370,7 +291,7 @@ vdec_try_fmt_common(struct v4l2_format *f)
 	memset(pfmt[0].reserved, 0, sizeof(pfmt[0].reserved));
 	memset(pixmp->reserved, 0, sizeof(pixmp->reserved));
 
-	fmt = find_format(pixmp->pixelformat, f->type);
+	fmt = find_format(fmts, size, pixmp->pixelformat, f->type);
 	if (!fmt) {
 		if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
 			pixmp->pixelformat = V4L2_PIX_FMT_NV12M;
@@ -378,7 +299,8 @@ vdec_try_fmt_common(struct v4l2_format *f)
 			pixmp->pixelformat = V4L2_PIX_FMT_H264;
 		else
 			return NULL;
-		fmt = find_format(pixmp->pixelformat, f->type);
+
+		fmt = find_format(fmts, size, pixmp->pixelformat, f->type);
 		pixmp->width = 1280;
 		pixmp->height = 720;
 	}
@@ -410,8 +332,11 @@ vdec_try_fmt_common(struct v4l2_format *f)
 
 static int vdec_try_fmt(struct file *file, void *fh, struct v4l2_format *f)
 {
+	struct vdec_session *sess = container_of(file->private_data, struct vdec_session, fh);
+
 	printk("vdec_try_fmt\n");
-	vdec_try_fmt_common(f);
+	vdec_try_fmt_common(sess->core->platform->formats,
+		sess->core->platform->num_formats, f);
 
 	return 0;
 }
@@ -442,7 +367,7 @@ static int vdec_g_fmt(struct file *file, void *fh, struct v4l2_format *f)
 		pixmp->height = sess->height;
 	}
 
-	vdec_try_fmt_common(f);
+	vdec_try_fmt_common(sess->core->platform->formats, sess->core->platform->num_formats, f);
 
 	return 0;
 }
@@ -451,15 +376,17 @@ static int vdec_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 {
 	struct vdec_session *sess = container_of(file->private_data, struct vdec_session, fh);
 	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
-	struct v4l2_pix_format_mplane orig_pixmp;
+	const struct vdec_format *formats = sess->core->platform->formats;
+	u32 num_formats = sess->core->platform->num_formats;
 	const struct vdec_format *fmt;
+	struct v4l2_pix_format_mplane orig_pixmp;
 	struct v4l2_format format;
 	u32 pixfmt_out = 0, pixfmt_cap = 0;
 
 	printk("vdec_s_fmt\n");
 	orig_pixmp = *pixmp;
 
-	fmt = vdec_try_fmt_common(f);
+	fmt = vdec_try_fmt_common(formats, num_formats, f);
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
 		pixfmt_out = pixmp->pixelformat;
@@ -475,7 +402,7 @@ static int vdec_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	format.fmt.pix_mp.pixelformat = pixfmt_out;
 	format.fmt.pix_mp.width = orig_pixmp.width;
 	format.fmt.pix_mp.height = orig_pixmp.height;
-	vdec_try_fmt_common(&format);
+	vdec_try_fmt_common(formats, num_formats, &format);
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
 		sess->width = format.fmt.pix_mp.width;
@@ -492,7 +419,7 @@ static int vdec_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	format.fmt.pix_mp.pixelformat = pixfmt_cap;
 	format.fmt.pix_mp.width = orig_pixmp.width;
 	format.fmt.pix_mp.height = orig_pixmp.height;
-	vdec_try_fmt_common(&format);
+	vdec_try_fmt_common(formats, num_formats, &format);
 
 	sess->width = format.fmt.pix_mp.width;
 	sess->height = format.fmt.pix_mp.height;
@@ -507,12 +434,14 @@ static int vdec_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 
 static int vdec_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 {
+	struct vdec_session *sess =
+		container_of(file->private_data, struct vdec_session, fh);
 	const struct vdec_format *fmt;
 
 	printk("vdec_enum_fmt\n");
 	memset(f->reserved, 0, sizeof(f->reserved));
 
-	fmt = find_format_by_index(f->index, f->type);
+	fmt = find_format_by_index(sess->core->platform->formats, sess->core->platform->num_formats, f->index, f->type);
 	if (!fmt)
 		return -EINVAL;
 
@@ -524,12 +453,16 @@ static int vdec_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 static int vdec_enum_framesizes(struct file *file, void *fh,
 				struct v4l2_frmsizeenum *fsize)
 {
+	struct vdec_session *sess =
+		container_of(file->private_data, struct vdec_session, fh);
+	const struct vdec_format *formats = sess->core->platform->formats;
+	u32 num_formats = sess->core->platform->num_formats;
 	const struct vdec_format *fmt;
 
-	fmt = find_format(fsize->pixel_format,
+	fmt = find_format(formats, num_formats, fsize->pixel_format,
 			  V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
 	if (!fmt) {
-		fmt = find_format(fsize->pixel_format,
+		fmt = find_format(formats, num_formats, fsize->pixel_format,
 				  V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
 		if (!fmt)
 			return -EINVAL;
@@ -621,6 +554,7 @@ static int m2m_queue_init(void *priv, struct vb2_queue *src_vq,
 static int vdec_open(struct file *file)
 {
 	struct vdec_core *core = video_drvdata(file);
+	const struct vdec_format *formats = core->platform->formats;
 	struct vdec_session *sess;
 	
 	sess = kzalloc(sizeof(*sess), GFP_KERNEL);
@@ -630,8 +564,8 @@ static int vdec_open(struct file *file)
 	printk("vdec_open\n");
 
 	sess->core = core;
-	sess->fmt_cap = &vdec_formats[0];
-	sess->fmt_out = &vdec_formats[1];
+	sess->fmt_cap = &formats[0];
+	sess->fmt_out = &formats[1];
 	sess->width = 1280;
 	sess->height = 720;
 	INIT_LIST_HEAD(&sess->bufs);
@@ -679,36 +613,27 @@ static int vdec_close(struct file *file)
 	return 0;
 }
 
-void vdec_dst_buf_done(struct vdec_session *sess, u32 buf_idx)
+void vdec_dst_buf_done(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 {
 	unsigned long flags;
 	struct vdec_buffer *tmp;
-	struct vb2_v4l2_buffer *vbuf;
 	struct device *dev = sess->core->dev_dec;
 
 	spin_lock_irqsave(&sess->bufs_spinlock, flags);
 	if (list_empty(&sess->bufs)) {
-		dev_err(dev, "Buffer %u done but list is empty\n", buf_idx);
+		dev_err(dev, "Buffer %u done but list is empty\n",
+			vbuf->vb2_buf.index);
 		vdec_abort(sess);
 		goto unlock;
 	}
 
 	tmp = list_first_entry(&sess->bufs, struct vdec_buffer, list);
 
-	vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx, buf_idx);
-	if (!vbuf) {
-		dev_err(dev, "Buffer %u done but it doesn't exist in m2m_ctx\n",
-			buf_idx);
-		vdec_abort(sess);
-		goto unlock;
-	}
-
 	vbuf->vb2_buf.planes[0].bytesused = vdec_get_output_size(sess);
 	vbuf->vb2_buf.planes[1].bytesused = vdec_get_output_size(sess) / 2;
 	vbuf->vb2_buf.timestamp = tmp->timestamp;
 	vbuf->sequence = sess->sequence_cap++;
 
-	atomic_dec(&sess->esparser_queued_bufs);
 	v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 	list_del(&tmp->list);
 	kfree(tmp);
@@ -717,7 +642,24 @@ unlock:
 	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
 
 	/* Buffer done probably means the vififo got freed */
+	atomic_dec(&sess->esparser_queued_bufs);
 	schedule_work(&sess->esparser_queue_work);
+}
+
+void vdec_dst_buf_done_idx(struct vdec_session *sess, u32 buf_idx)
+{
+	struct vb2_v4l2_buffer *vbuf;
+	struct device *dev = sess->core->dev_dec;
+
+	vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx, buf_idx);
+	if (!vbuf) {
+		dev_err(dev, "Buffer %u done but it doesn't exist in m2m_ctx\n",
+			buf_idx);
+		vdec_abort(sess);
+		return;
+	}
+
+	vdec_dst_buf_done(sess, vbuf);
 }
 
 /* Userspace will often queue input buffers that are not
@@ -781,12 +723,24 @@ static const struct v4l2_file_operations vdec_fops = {
 #endif
 };
 
+static const struct of_device_id vdec_dt_match[] = {
+	{ .compatible = "amlogic,meson-gxbb-vdec",
+	  .data = &vdec_platform_gxbb },
+	{ .compatible = "amlogic,meson-gxm-vdec",
+	  .data = &vdec_platform_gxm },
+	{ .compatible = "amlogic,meson-gxl-vdec",
+	  .data = &vdec_platform_gxl },
+	{}
+};
+MODULE_DEVICE_TABLE(of, vdec_dt_match);
+
 static int vdec_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct video_device *vdev;
 	struct vdec_core *core;
 	struct resource *r;
+	const struct of_device_id *of_id;
 	int irq;
 	int ret;
 
@@ -820,7 +774,8 @@ static int vdec_probe(struct platform_device *pdev)
 		return PTR_ERR(core->dmc_base);
 	}
 
-	core->regmap_ao = syscon_regmap_lookup_by_phandle(dev->of_node, "amlogic,ao-sysctrl");
+	core->regmap_ao = syscon_regmap_lookup_by_phandle(dev->of_node,
+						"amlogic,ao-sysctrl");
 	if (IS_ERR(core->regmap_ao)) {
 		printk("Couldn't regmap AO sysctrl\n");
 		return PTR_ERR(core->regmap_ao);
@@ -861,6 +816,8 @@ static int vdec_probe(struct platform_device *pdev)
 		goto err_vdev_release;
 	}
 
+	of_id = of_match_node(vdec_dt_match, dev->of_node);
+	core->platform = of_id->data;
 	core->vdev_dec = vdev;
 	core->dev_dec = dev;
 
@@ -882,12 +839,6 @@ static int vdec_remove(struct platform_device *pdev)
 
 	return 0;
 }
-
-static const struct of_device_id vdec_dt_match[] = {
-	{ .compatible = "amlogic,meson8b-vdec" },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, vdec_dt_match);
 
 static struct platform_driver meson_vdec_driver = {
 	.probe = vdec_probe,

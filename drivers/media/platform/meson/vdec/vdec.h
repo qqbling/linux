@@ -1,4 +1,6 @@
 /*
+ * Copyright (C) 2018 Maxime Jourdan <maxi.jourdan@wanadoo.fr>
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -18,6 +20,8 @@
 #include <media/videobuf2-v4l2.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
+
+#include "vdec_platform.h"
 
 #define REG_BUF_SIZE 21
 
@@ -42,6 +46,7 @@ struct vdec_core {
 
 	struct device *dev;
 	struct device *dev_dec;
+	const struct vdec_platform *platform;
 
 	struct video_device *vdev_dec;
 	struct v4l2_device v4l2_dev;
@@ -129,7 +134,8 @@ struct vdec_session {
 };
 
 u32 vdec_get_output_size(struct vdec_session *sess);
-void vdec_dst_buf_done(struct vdec_session *sess, u32 buf_idx);
+void vdec_dst_buf_done_idx(struct vdec_session *sess, u32 buf_idx);
+void vdec_dst_buf_done(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf);
 void vdec_add_buf_reorder(struct vdec_session *sess, u64 ts);
 void vdec_remove_buf(struct vdec_session *sess, u64 ts);
 

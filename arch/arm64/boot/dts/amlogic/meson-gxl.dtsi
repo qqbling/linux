@@ -783,6 +783,7 @@
 };
 
 &vdec {
+	compatible = "amlogic,meson-gxl-vdec";
 	power-domains = <&pwrc_vdec>;
 };
 

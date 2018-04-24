@@ -199,8 +199,8 @@ union rpm_param {
 		unsigned short tiles_flags;
 		unsigned short num_tile_columns_minus1;
 		unsigned short num_tile_rows_minus1;
-		unsigned short tile_width[4];
-		unsigned short tile_height[4];
+		unsigned short tile_width[8];
+		unsigned short tile_height[8];
 		unsigned short misc_flag0;
 		unsigned short pps_beta_offset_div2;
 		unsigned short pps_tc_offset_div2;
@@ -1268,15 +1268,14 @@ end:
 static void codec_hevc_update_pocs(struct vdec_session *sess)
 {
 	struct codec_hevc *hevc = sess->priv;
-	u32 nal_unit_type = hevc->rpm_param.p.m_nalUnitType;
-	u32 temporal_id = hevc->rpm_param.p.m_temporalId;
-	int iMaxPOClsb =
-		1 << (hevc->rpm_param.p.
-		log2_max_pic_order_cnt_lsb_minus4 + 4);
+	union rpm_param *param = &hevc->rpm_param;
+	u32 nal_unit_type = param->p.m_nalUnitType;
+	u32 temporal_id = param->p.m_temporalId & 0x7;
+	int iMaxPOClsb = 1 << (param->p.log2_max_pic_order_cnt_lsb_minus4 + 4);
 	int iPrevPOClsb;
 	int iPrevPOCmsb;
 	int iPOCmsb;
-	int iPOClsb = hevc->rpm_param.p.POClsb;
+	int iPOClsb = param->p.POClsb;
 
 	hevc->iPrevPOC = hevc->curr_poc;
 
@@ -1302,7 +1301,7 @@ static void codec_hevc_update_pocs(struct vdec_session *sess)
 	if (nal_unit_type == NAL_UNIT_CODED_SLICE_BLA   ||
 	    nal_unit_type == NAL_UNIT_CODED_SLICE_BLANT ||
 	    nal_unit_type == NAL_UNIT_CODED_SLICE_BLA_N_LP)
-		iPOCmsb = 0; /* For BLA picture types, POCmsb is set to 0. */
+		iPOCmsb = 0;
 
 	hevc->curr_poc = (iPOCmsb + iPOClsb);
 	if ((temporal_id - 1) == 0)

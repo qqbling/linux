@@ -1,3 +1,17 @@
+/*
+ * Copyright (C) 2018 Maxime Jourdan
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
+
 #include <linux/firmware.h>
 
 #include "vdec_1.h"
@@ -110,7 +124,6 @@ static int vdec_hevc_start(struct vdec_session *sess)
 
 	/* Reset VDEC_HEVC*/
 	writel_relaxed(0xffffffff, core->dos_base + DOS_SW_RESET3);
-	udelay(10);
 	writel_relaxed(0x00000000, core->dos_base + DOS_SW_RESET3);
 
 	writel_relaxed(0xffffffff, core->dos_base + DOS_GCLK_EN3);
@@ -121,6 +134,10 @@ static int vdec_hevc_start(struct vdec_session *sess)
 	/* Remove VDEC_HEVC Isolation */
 	regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0, 0xc00, 0);
 
+	writel_relaxed(0xffffffff, core->dos_base + DOS_SW_RESET3);
+	udelay(10);
+	writel_relaxed(0x00000000, core->dos_base + DOS_SW_RESET3);
+
 	vdec_hevc_stbuf_init(sess);
 
 	ret = vdec_hevc_load_firmware(sess, sess->fmt_out->firmware_path);
@@ -128,6 +145,12 @@ static int vdec_hevc_start(struct vdec_session *sess)
 		return ret;
 
 	codec_ops->start(sess);
+
+	writel_relaxed((1<<12)|(1<<11), core->dos_base + DOS_SW_RESET3);
+	writel_relaxed(0, core->dos_base + DOS_SW_RESET3);
+	readl_relaxed(core->dos_base + DOS_SW_RESET3);
+
+	writel_relaxed(1, core->dos_base + HEVC_MPSR);
 
 	printk("vdec_hevc_start end\n");
 

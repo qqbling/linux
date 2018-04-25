@@ -4,7 +4,6 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/mfd/syscon.h>
-#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-event.h>
@@ -46,6 +45,10 @@ static int vdec_poweron(struct vdec_session *sess)
 
 	printk("vdec_poweron\n");
 
+	ret = clk_prepare_enable(sess->core->dos_parser_clk);
+	if (ret)
+		return ret;
+
 	ret = vdec_ops->start(sess);
 	if (ret)
 		return ret;
@@ -61,6 +64,7 @@ static void vdec_poweroff(struct vdec_session *sess) {
 
 	codec_ops->stop(sess);
 	vdec_ops->stop(sess);
+	clk_disable_unprepare(sess->core->dos_parser_clk);
 }
 
 static void vdec_queue_recycle(struct vdec_session *sess, struct vb2_buffer *vb)
@@ -171,7 +175,6 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 		goto bufs_done;
 	}
 
-	pm_runtime_get_sync(sess->core->dev_dec);
 	ret = vdec_poweron(sess);
 	if (ret)
 		goto vififo_free;
@@ -204,7 +207,6 @@ void vdec_stop_streaming(struct vb2_queue *q)
 
 	if (sess->streamon_out & sess->streamon_cap) {
 		vdec_poweroff(sess);
-		pm_runtime_put_sync(sess->core->dev_dec);
 		dma_free_coherent(sess->core->dev, sess->vififo_size, sess->vififo_vaddr, sess->vififo_paddr);
 		INIT_LIST_HEAD(&sess->bufs);
 		INIT_LIST_HEAD(&sess->bufs_recycle);
@@ -723,6 +725,22 @@ static const struct v4l2_file_operations vdec_fops = {
 #endif
 };
 
+static irqreturn_t vdec_isr(int irq, void *data)
+{
+	struct vdec_core *core = data;
+	struct vdec_session *sess = core->cur_sess;
+
+	return sess->fmt_out->codec_ops->isr(sess);
+}
+
+static irqreturn_t vdec_threaded_isr(int irq, void *data)
+{
+	struct vdec_core *core = data;
+	struct vdec_session *sess = core->cur_sess;
+
+	return sess->fmt_out->codec_ops->threaded_isr(sess);
+}
+
 static const struct of_device_id vdec_dt_match[] = {
 	{ .compatible = "amlogic,meson-gxbb-vdec",
 	  .data = &vdec_platform_gxbb },
@@ -781,12 +799,30 @@ static int vdec_probe(struct platform_device *pdev)
 		return PTR_ERR(core->regmap_ao);
 	}
 
+	core->dos_parser_clk = devm_clk_get(dev, "dos_parser");
+	if (IS_ERR(core->dos_parser_clk)) {
+		dev_err(dev, "dos_parser clock request failed\n");
+		return PTR_ERR(core->dos_parser_clk);
+	}
+
+	core->vdec_1_clk = devm_clk_get(dev, "vdec_1");
+	if (IS_ERR(core->vdec_1_clk)) {
+		dev_err(dev, "vdec_1 clock request failed\n");
+		return PTR_ERR(core->vdec_1_clk);
+	}
+
+	core->vdec_hevc_clk = devm_clk_get(dev, "vdec_hevc");
+	if (IS_ERR(core->vdec_hevc_clk)) {
+		dev_err(dev, "vdec_hevc clock request failed\n");
+		return PTR_ERR(core->vdec_hevc_clk);
+	}
+
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
 		
-	ret = devm_request_irq(core->dev, irq, vdec_1_isr,
-				IRQF_SHARED, "vdecirq", core);
+	ret = devm_request_threaded_irq(core->dev, irq, vdec_isr,
+			vdec_threaded_isr, IRQF_ONESHOT, "vdec", core);
 	if (ret)
 		return ret;
 
@@ -822,7 +858,6 @@ static int vdec_probe(struct platform_device *pdev)
 	core->dev_dec = dev;
 
 	video_set_drvdata(vdev, core);
-	pm_runtime_enable(dev);
 
 	return 0;
 

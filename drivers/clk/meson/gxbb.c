@@ -1554,13 +1554,14 @@ static struct clk_regmap gxbb_vdec_1_sel = {
 		.offset = HHI_VDEC_CLK_CNTL,
 		.mask = 0x3,
 		.shift = 9,
+		.flags = CLK_MUX_ROUND_CLOSEST,
 	},
 	.hw.init = &(struct clk_init_data){
 		.name = "vdec_1_sel",
 		.ops = &clk_regmap_mux_ops,
 		.parent_names = gxbb_vdec_parent_names,
 		.num_parents = ARRAY_SIZE(gxbb_vdec_parent_names),
-		.flags = CLK_SET_RATE_NO_REPARENT,
+		.flags = CLK_SET_RATE_PARENT,
 	},
 };
 
@@ -1589,7 +1590,7 @@ static struct clk_regmap gxbb_vdec_1 = {
 		.ops = &clk_regmap_gate_ops,
 		.parent_names = (const char *[]){ "vdec_1_div" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT | CLK_IGNORE_UNUSED,
+		.flags = CLK_SET_RATE_PARENT,
 	},
 };
 
@@ -1598,13 +1599,14 @@ static struct clk_regmap gxbb_vdec_hevc_sel = {
 		.offset = HHI_VDEC2_CLK_CNTL,
 		.mask = 0x3,
 		.shift = 25,
+		.flags = CLK_MUX_ROUND_CLOSEST,
 	},
 	.hw.init = &(struct clk_init_data){
 		.name = "vdec_hevc_sel",
 		.ops = &clk_regmap_mux_ops,
 		.parent_names = gxbb_vdec_parent_names,
 		.num_parents = ARRAY_SIZE(gxbb_vdec_parent_names),
-		.flags = CLK_SET_RATE_NO_REPARENT,
+		.flags = CLK_SET_RATE_PARENT,
 	},
 };
 
@@ -1633,7 +1635,7 @@ static struct clk_regmap gxbb_vdec_hevc = {
 		.ops = &clk_regmap_gate_ops,
 		.parent_names = (const char *[]){ "vdec_hevc_div" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT | CLK_IGNORE_UNUSED,
+		.flags = CLK_SET_RATE_PARENT,
 	},
 };
 
@@ -1881,8 +1883,8 @@ static struct clk_hw_onecell_data gxbb_hw_onecell_data = {
 		[CLKID_FCLK_DIV5_DIV]	    = &gxbb_fclk_div5_div.hw,
 		[CLKID_FCLK_DIV7_DIV]	    = &gxbb_fclk_div7_div.hw,
 		[CLKID_VDEC_1_SEL]	    = &gxbb_vdec_1_sel.hw,
-		[CLKID_VDEC_1_DIV]          = &gxbb_vdec_1_div.hw,
-		[CLKID_VDEC_1]         	    = &gxbb_vdec_1.hw,
+		[CLKID_VDEC_1_DIV]	    = &gxbb_vdec_1_div.hw,
+		[CLKID_VDEC_1]		    = &gxbb_vdec_1.hw,
 		[CLKID_VDEC_HEVC_SEL]	    = &gxbb_vdec_hevc_sel.hw,
 		[CLKID_VDEC_HEVC_DIV]	    = &gxbb_vdec_hevc_div.hw,
 		[CLKID_VDEC_HEVC]	    = &gxbb_vdec_hevc.hw,
@@ -2043,8 +2045,8 @@ static struct clk_hw_onecell_data gxl_hw_onecell_data = {
 		[CLKID_FCLK_DIV5_DIV]	    = &gxbb_fclk_div5_div.hw,
 		[CLKID_FCLK_DIV7_DIV]	    = &gxbb_fclk_div7_div.hw,
 		[CLKID_VDEC_1_SEL]	    = &gxbb_vdec_1_sel.hw,
-		[CLKID_VDEC_1_DIV]          = &gxbb_vdec_1_div.hw,
-		[CLKID_VDEC_1]         	    = &gxbb_vdec_1.hw,
+		[CLKID_VDEC_1_DIV]	    = &gxbb_vdec_1_div.hw,
+		[CLKID_VDEC_1]		    = &gxbb_vdec_1.hw,
 		[CLKID_VDEC_HEVC_SEL]	    = &gxbb_vdec_hevc_sel.hw,
 		[CLKID_VDEC_HEVC_DIV]	    = &gxbb_vdec_hevc_div.hw,
 		[CLKID_VDEC_HEVC]	    = &gxbb_vdec_hevc.hw,

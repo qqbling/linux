@@ -48,6 +48,10 @@ struct vdec_core {
 	struct device *dev_dec;
 	const struct vdec_platform *platform;
 
+	struct clk *dos_parser_clk;
+	struct clk *vdec_1_clk;
+	struct clk *vdec_hevc_clk;
+
 	struct video_device *vdev_dec;
 	struct v4l2_device v4l2_dev;
 	
@@ -68,6 +72,7 @@ struct vdec_codec_ops {
 	int (*stop)(struct vdec_session *sess);
 	int (*load_extended_firmware)(struct vdec_session *sess, const u8 *data, u32 len);
 	irqreturn_t (*isr)(struct vdec_session *sess);
+	irqreturn_t (*threaded_isr)(struct vdec_session *sess);
 };
 
 /* Describes one of the format that can be decoded/encoded */
@@ -87,11 +92,10 @@ struct vdec_format {
 struct vdec_session {
 	struct vdec_core *core;
 	
-	struct mutex lock;
-	
 	struct v4l2_fh fh;
 	struct v4l2_m2m_dev *m2m_dev;
 	struct v4l2_m2m_ctx *m2m_ctx;
+	struct mutex lock;
 	
 	const struct vdec_format *fmt_out;
 	const struct vdec_format *fmt_cap;
@@ -129,7 +133,8 @@ struct vdec_session {
 	/* Buffers queued into the HW */
 	struct list_head bufs;
 	spinlock_t bufs_spinlock;
-	
+
+	/* Codec private data */
 	void *priv;
 };
 

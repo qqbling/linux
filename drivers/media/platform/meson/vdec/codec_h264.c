@@ -82,9 +82,7 @@ struct codec_h264 {
 	void      *sei_vaddr;
 	dma_addr_t sei_paddr;
 
-	/* Housekeeping thread for marking buffers to DONE
-	 * and recycling them into the hardware
-	 */
+	/* Housekeeping thread for recycling buffers them into the hardware */
 	struct task_struct *buffers_thread;
 };
 

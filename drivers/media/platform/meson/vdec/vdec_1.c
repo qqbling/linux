@@ -1,9 +1,26 @@
+/*
+ * Copyright (C) 2018 Maxime Jourdan <maxi.jourdan@wanadoo.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
+
 #include <linux/firmware.h>
+#include <linux/clk.h>
 
 #include "vdec_1.h"
 
 /* AO Registers */
-#define AO_RTI_GEN_PWR_ISO0 0xec
+#define AO_RTI_GEN_PWR_SLEEP0	0xe8
+#define AO_RTI_GEN_PWR_ISO0	0xec
+	#define GEN_PWR_VDEC_1 (BIT(3) | BIT(2))
 
 /* DOS Registers */
 #define ASSIST_MBOX1_CLR_REG 0x01d4
@@ -133,14 +150,6 @@ int vdec_1_stbuf_power_up(struct vdec_session *sess) {
 	return 0;
 }
 
-irqreturn_t vdec_1_isr(int irq, void *data)
-{
-	struct vdec_core *core = data;
-	struct vdec_session *sess = core->cur_sess;
-
-	return sess->fmt_out->codec_ops->isr(sess);
-}
-
 static void vdec_1_conf_esparser(struct vdec_session *sess)
 {
 	struct vdec_core *core = sess->core;
@@ -165,6 +174,16 @@ static int vdec_1_start(struct vdec_session *sess)
 	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
 
 	printk("vdec_1_start\n");
+
+	clk_set_rate(core->vdec_1_clk, 666666666);
+	ret = clk_prepare_enable(core->vdec_1_clk);
+	if (ret)
+		return ret;
+
+	regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
+		GEN_PWR_VDEC_1, 0);
+	udelay(10);
+
 	/* Reset VDEC1 */
 	writel_relaxed(0xfffffffc, core->dos_base + DOS_SW_RESET0);
 	writel_relaxed(0x00000000, core->dos_base + DOS_SW_RESET0);
@@ -173,10 +192,8 @@ static int vdec_1_start(struct vdec_session *sess)
 
 	/* VDEC Memories */
 	writel_relaxed(0x00000000, core->dos_base + DOS_MEM_PD_VDEC);
-
 	/* Remove VDEC1 Isolation */
 	regmap_write(core->regmap_ao, AO_RTI_GEN_PWR_ISO0, 0x00000000);
-
 	/* Reset DOS top registers */
 	writel_relaxed(0x00000000, core->dos_base + DOS_VDEC_MCRCC_STALL_CTRL);
 
@@ -186,8 +203,12 @@ static int vdec_1_start(struct vdec_session *sess)
 	vdec_1_stbuf_power_up(sess);
 
 	ret = vdec_1_load_firmware(sess, sess->fmt_out->firmware_path);
-	if (ret)
+	if (ret) {
+		clk_disable_unprepare(core->vdec_1_clk);
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
+			GEN_PWR_VDEC_1, GEN_PWR_VDEC_1);
 		return ret;
+	}
 
 	codec_ops->start(sess);
 
@@ -232,6 +253,10 @@ static int vdec_1_stop(struct vdec_session *sess)
 	regmap_write(core->regmap_ao, AO_RTI_GEN_PWR_ISO0, 0xc0);
 	/* power off vdec1 memories */
 	writel(0xffffffffUL, core->dos_base + DOS_MEM_PD_VDEC);
+	regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
+		GEN_PWR_VDEC_1, GEN_PWR_VDEC_1);
+
+	clk_disable_unprepare(core->vdec_1_clk);
 
 	printk("vdec_poweroff end\n");
 	return 0;

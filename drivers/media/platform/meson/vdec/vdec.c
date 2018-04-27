@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Copyright (C) 2018 Maxime Jourdan <maxi.jourdan@wanadoo.fr>
+ */
+
 #include <linux/of_device.h>
 #include <linux/clk.h>
 #include <linux/io.h>
@@ -21,7 +26,7 @@
 /* 16 MiB for parsed bitstream swap exchange */
 #define SIZE_VIFIFO (16 * SZ_1M)
 
-static void vdec_abort(struct vdec_session *sess)
+void vdec_abort(struct vdec_session *sess)
 {
 	printk("Aborting decoding session!\n");
 	vb2_queue_error(&sess->m2m_ctx->cap_q_ctx.q);
@@ -60,9 +65,7 @@ static int vdec_poweron(struct vdec_session *sess)
 
 static void vdec_poweroff(struct vdec_session *sess) {
 	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
-	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
 
-	codec_ops->stop(sess);
 	vdec_ops->stop(sess);
 	clk_disable_unprepare(sess->core->dos_parser_clk);
 }
@@ -558,12 +561,21 @@ static int vdec_open(struct file *file)
 	struct vdec_core *core = video_drvdata(file);
 	const struct vdec_format *formats = core->platform->formats;
 	struct vdec_session *sess;
-	
-	sess = kzalloc(sizeof(*sess), GFP_KERNEL);
-	if (!sess)
-		return -ENOMEM;
 
-	printk("vdec_open\n");
+	mutex_lock(&core->lock);
+	if (core->cur_sess) {
+		mutex_unlock(&core->lock);
+		return -EBUSY;
+	}
+
+	sess = kzalloc(sizeof(*sess), GFP_KERNEL);
+	if (!sess) {
+		mutex_unlock(&core->lock);
+		return -ENOMEM;
+	}
+
+	core->cur_sess = sess;
+	mutex_unlock(&core->lock);
 
 	sess->core = core;
 	sess->fmt_cap = &formats[0];
@@ -576,8 +588,6 @@ static int vdec_open(struct file *file)
 	spin_lock_init(&sess->bufs_spinlock);
 	mutex_init(&sess->lock);
 	mutex_init(&sess->bufs_recycle_lock);
-
-	core->cur_sess = sess;
 
 	sess->m2m_dev = v4l2_m2m_init(&vdec_m2m_ops);
 	if (IS_ERR(sess->m2m_dev)) {
@@ -602,6 +612,7 @@ static int vdec_open(struct file *file)
 static int vdec_close(struct file *file)
 {
 	struct vdec_session *sess = container_of(file->private_data, struct vdec_session, fh);
+	struct vdec_core *core = sess->core;
 
 	printk("vdec_close\n");
 	v4l2_m2m_ctx_release(sess->m2m_ctx);
@@ -611,6 +622,7 @@ static int vdec_close(struct file *file)
 	mutex_destroy(&sess->lock);
 
 	kfree(sess);
+	core->cur_sess = NULL;
 
 	return 0;
 }
@@ -826,13 +838,15 @@ static int vdec_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	ret = esparser_init(pdev, core);
+	if (ret)
+		return ret;
+
 	ret = v4l2_device_register(dev, &core->v4l2_dev);
 	if (ret) {
 		printk("Couldn't register v4l2 device\n");
 		return -ENOMEM;
 	}
-
-	ret = esparser_init(pdev, core);
 
 	vdev = video_device_alloc();
 	if (!vdev)
@@ -845,6 +859,7 @@ static int vdec_probe(struct platform_device *pdev)
 	vdev->vfl_dir = VFL_DIR_M2M;
 	vdev->v4l2_dev = &core->v4l2_dev;
 	vdev->device_caps = V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
+	mutex_init(&core->lock);
 
 	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
 	if (ret) {

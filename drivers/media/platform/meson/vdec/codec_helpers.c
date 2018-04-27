@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Copyright (C) 2018 Maxime Jourdan <maxi.jourdan@wanadoo.fr>
+ */
+
 #include <media/v4l2-mem2mem.h>
 #include <media/videobuf2-dma-contig.h>
 

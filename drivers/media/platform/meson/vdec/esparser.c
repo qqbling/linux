@@ -1,13 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+ * Copyright (C) 2018 Maxime Jourdan <maxi.jourdan@wanadoo.fr>
  */
 
 #include <linux/init.h>
@@ -238,15 +231,6 @@ int esparser_init(struct platform_device *pdev, struct vdec_core *core)
 		printk("Failed requesting IRQ\n");
 		return ret;
 	}
-
-	/* Generate a fake start code to trigger the esparser IRQ later on */
-	/*core->fake_pattern = (unsigned char *)kcalloc(1, SEARCH_PATTERN_LEN, GFP_KERNEL);
-	core->fake_pattern[0] = 0x00;
-	core->fake_pattern[1] = 0x00;
-	core->fake_pattern[2] = 0x01;
-	core->fake_pattern[3] = 0xff;
-	core->fake_pattern_map = dma_map_single(NULL, core->fake_pattern,
-						SEARCH_PATTERN_LEN, DMA_TO_DEVICE);*/
 
 	return 0;
 }

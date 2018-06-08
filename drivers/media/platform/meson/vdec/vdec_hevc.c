@@ -102,8 +102,7 @@ static void vdec_hevc_conf_esparser(struct vdec_session *sess)
 
 static u32 vdec_hevc_vififo_level(struct vdec_session *sess)
 {
-	/* TODO */
-	return 0;
+	return readl_relaxed(sess->core->dos_base + HEVC_STREAM_LEVEL);
 }
 
 static int vdec_hevc_stop(struct vdec_session *sess)

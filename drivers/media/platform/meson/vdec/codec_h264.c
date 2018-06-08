@@ -138,7 +138,6 @@ static int codec_h264_start(struct vdec_session *sess) {
 	while (readl_relaxed(core->dos_base + DCAC_DMA_CTRL) & 0x8000) { }
 	while (readl_relaxed(core->dos_base + LMEM_DMA_CTRL) & 0x8000) { }
 
-	/* Taken from old AMLogic code. No idea. */
 	writel_relaxed((1<<7) | (1<<6) | (1<<4), core->dos_base + DOS_SW_RESET0);
 	writel_relaxed(0, core->dos_base + DOS_SW_RESET0);
 	readl_relaxed(core->dos_base + DOS_SW_RESET0);
@@ -171,7 +170,7 @@ static int codec_h264_start(struct vdec_session *sess) {
 	writel_relaxed(1, core->dos_base + ASSIST_MBOX1_CLR_REG);
 	writel_relaxed(1, core->dos_base + ASSIST_MBOX1_MASK);
 
-	/* Enable NV21 */
+	/* Enable 2-plane output */
 	writel_relaxed(readl_relaxed(core->dos_base + MDEC_PIC_DC_CTRL) | (1 << 17), core->dos_base + MDEC_PIC_DC_CTRL);
 
 	/* ?? */
@@ -196,25 +195,17 @@ static int codec_h264_stop(struct vdec_session *sess)
 
 	kthread_stop(h264->buffers_thread);
 
-	if (h264->ext_fw_vaddr) {
+	if (h264->ext_fw_vaddr)
 		dma_free_coherent(core->dev, SIZE_EXT_FW, h264->ext_fw_vaddr, h264->ext_fw_paddr);
-		h264->ext_fw_vaddr = 0;
-	}
 	
-	if (h264->workspace_vaddr) {
+	if (h264->workspace_vaddr)
 		dma_free_coherent(core->dev, SIZE_WORKSPACE, h264->workspace_vaddr, h264->workspace_paddr);
-		h264->workspace_vaddr = 0;
-	}
 	
-	if (h264->ref_vaddr) {
+	if (h264->ref_vaddr)
 		dma_free_coherent(core->dev, h264->ref_size, h264->ref_vaddr, h264->ref_paddr);
-		h264->ref_vaddr = 0;
-	}
 	
-	if (h264->sei_vaddr) {
+	if (h264->sei_vaddr)
 		dma_free_coherent(core->dev, SIZE_SEI, h264->sei_vaddr, h264->sei_paddr);
-		h264->sei_vaddr = 0;
-	}
 
 	kfree(h264);
 	sess->priv = 0;

@@ -179,6 +179,7 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 		goto bufs_done;
 	}
 
+	sess->should_stop = 0;
 	ret = vdec_poweron(sess);
 	if (ret)
 		goto vififo_free;
@@ -494,6 +495,47 @@ static int vdec_enum_framesizes(struct file *file, void *fh,
 	return 0;
 }
 
+static int
+vdec_try_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
+{
+	printk("vidioc_try_decoder_cmd: %u\n", cmd->cmd);
+	switch (cmd->cmd) {
+	case V4L2_DEC_CMD_STOP:
+		if (cmd->flags & V4L2_DEC_CMD_STOP_TO_BLACK)
+			return -EINVAL;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
+vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
+{
+	struct vdec_session *sess =
+		container_of(file->private_data, struct vdec_session, fh);
+	int ret;
+
+	printk("vdec_decoder_cmd: %u\n", cmd->cmd);
+
+	ret = vdec_try_decoder_cmd(file, fh, cmd);
+	if (ret)
+		return ret;
+
+	mutex_lock(&sess->lock);
+
+	if (!(sess->streamon_out & sess->streamon_cap))
+		goto unlock;
+
+	esparser_queue_eos(sess);
+
+unlock:
+	mutex_unlock(&sess->lock);
+	return ret;
+}
+
 static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_querycap = vdec_querycap,
 	.vidioc_enum_fmt_vid_cap_mplane = vdec_enum_fmt,
@@ -518,8 +560,8 @@ static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_enum_framesizes = vdec_enum_framesizes,
 	//.vidioc_subscribe_event = vdec_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
-	//.vidioc_try_decoder_cmd = vdec_try_decoder_cmd,
-	//.vidioc_decoder_cmd = vdec_decoder_cmd,
+	.vidioc_try_decoder_cmd = vdec_try_decoder_cmd,
+	.vidioc_decoder_cmd = vdec_decoder_cmd,
 };
 
 static int m2m_queue_init(void *priv, struct vb2_queue *src_vq,
@@ -642,6 +684,8 @@ void vdec_dst_buf_done(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 	if (list_empty(&sess->bufs)) {
 		dev_err(dev, "Buffer %u done but list is empty\n",
 			vbuf->vb2_buf.index);
+
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
 		vdec_abort(sess);
 		goto unlock;
 	}
@@ -653,9 +697,13 @@ void vdec_dst_buf_done(struct vdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 	vbuf->vb2_buf.timestamp = tmp->timestamp;
 	vbuf->sequence = sess->sequence_cap++;
 
-	v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 	list_del(&tmp->list);
 	kfree(tmp);
+
+	if (sess->should_stop && list_empty(&sess->bufs))
+		vbuf->flags |= V4L2_BUF_FLAG_LAST;
+
+	v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 
 unlock:
 	spin_unlock_irqrestore(&sess->bufs_spinlock, flags);
@@ -864,7 +912,6 @@ static int vdec_probe(struct platform_device *pdev)
 	vdev->vfl_dir = VFL_DIR_M2M;
 	vdev->v4l2_dev = &core->v4l2_dev;
 	vdev->device_caps = V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
-	mutex_init(&core->lock);
 
 	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
 	if (ret) {
@@ -876,6 +923,7 @@ static int vdec_probe(struct platform_device *pdev)
 	core->platform = of_id->data;
 	core->vdev_dec = vdev;
 	core->dev_dec = dev;
+	mutex_init(&core->lock);
 
 	video_set_drvdata(vdev, core);
 

@@ -74,21 +74,24 @@ static int vdec_1_load_firmware(struct vdec_session *sess, const char* fwname)
 	u32 i = 1000;
 
 	ret = request_firmware(&fw, fwname, dev);
-	if (ret < 0)  {
-		dev_err(dev, "Unable to request firmware %s\n", fwname);
+	if (ret < 0)
 		return -EINVAL;
+
+	if (fw->size < MC_SIZE) {
+		dev_err(dev, "Firmware size %zu is too small. Expected %u.\n",
+			fw->size, MC_SIZE);
+		ret = -EINVAL;
+		goto release_firmware;
 	}
 
-	mc_addr = kmalloc(MC_SIZE, GFP_KERNEL);
-	if (!mc_addr)
-		return -ENOMEM;
+	mc_addr = dma_alloc_coherent(core->dev, MC_SIZE, &mc_addr_map, GFP_KERNEL);
+	if (!mc_addr) {
+		dev_err(dev, "Failed allocating memory for firmware loading\n");
+		ret = -ENOMEM;
+		goto release_firmware;
+	 }
 
 	memcpy(mc_addr, fw->data, MC_SIZE);
-	mc_addr_map = dma_map_single(core->dev, mc_addr, MC_SIZE, DMA_TO_DEVICE);
-	if (!mc_addr_map) {
-		dev_err(dev, "Couldn't MAP DMA addr\n");
-		return -EINVAL;
-	}
 
 	writel_relaxed(0, core->dos_base + MPSR);
 	writel_relaxed(0, core->dos_base + CPSR);
@@ -104,14 +107,15 @@ static int vdec_1_load_firmware(struct vdec_session *sess, const char* fwname)
 	if (i == 0) {
 		printk("Firmware load fail (DMA hang?)\n");
 		ret = -EINVAL;
-	} else
-		printk("Firmware load success\n");
+		goto free_mc;
+	}
 
 	if (codec_ops->load_extended_firmware)
 		codec_ops->load_extended_firmware(sess, fw->data + MC_SIZE, fw->size - MC_SIZE);
 
-	dma_unmap_single(core->dev, mc_addr_map, MC_SIZE, DMA_TO_DEVICE);
-	kfree(mc_addr);
+free_mc:
+	dma_free_coherent(core->dev, MC_SIZE, mc_addr, mc_addr_map);
+release_firmware:
 	release_firmware(fw);
 	return ret;
 }

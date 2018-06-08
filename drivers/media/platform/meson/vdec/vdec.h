@@ -113,6 +113,11 @@ struct vdec_session {
 	/* Capture sequence counter */
 	unsigned int sequence_cap;
 
+	/* Whether userspace signaled EOS via command, empty buffer or
+	 * V4L2_BUF_FLAG_LAST
+	 */
+	unsigned int should_stop;
+
 	/* Big contiguous area for the VIFIFO */
 	void *vififo_vaddr;
 	dma_addr_t vififo_paddr;

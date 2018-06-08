@@ -402,7 +402,7 @@ static void codec_hevc_update_frame_refs(struct vdec_session *sess, struct hevc_
 	}
 
 	for (i = 0; i < 16; i++) {
-		u32 cur_rps = params->p.CUR_RPS[i];
+		u16 cur_rps = params->p.CUR_RPS[i];
 		int delt = cur_rps & ((1 << (RPS_USED_BIT - 1)) - 1);
 
 		if (cur_rps & 0x8000)

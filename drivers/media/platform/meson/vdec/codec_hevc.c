@@ -1475,7 +1475,9 @@ static irqreturn_t codec_hevc_threaded_isr(struct vdec_session *sess)
 		return IRQ_HANDLED;
 	}
 
-	codec_hevc_process_segment_header(sess);
+	if (codec_hevc_process_segment_header(sess) == -1)
+		return IRQ_HANDLED;
+
 	codec_hevc_update_frame_refs(sess, hevc->cur_frame);
 	codec_hevc_update_col_frame(hevc);
 	codec_hevc_update_ldc_flag(hevc);

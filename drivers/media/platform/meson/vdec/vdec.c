@@ -155,6 +155,7 @@ unlock:
 static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct vdec_session *sess = vb2_get_drv_priv(q);
+	struct vb2_v4l2_buffer *buf;
 	int ret;
 	
 	printk("vdec_start_streaming\n");
@@ -192,6 +193,10 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 vififo_free:
 	dma_free_coherent(sess->core->dev, sess->vififo_size, sess->vififo_vaddr, sess->vififo_paddr);
 bufs_done:
+	while ((buf = v4l2_m2m_src_buf_remove(sess->m2m_ctx)))
+		v4l2_m2m_buf_done(buf, VB2_BUF_STATE_QUEUED);
+	while ((buf = v4l2_m2m_dst_buf_remove(sess->m2m_ctx)))
+		v4l2_m2m_buf_done(buf, VB2_BUF_STATE_QUEUED);
 	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		sess->streamon_out = 0;
 	else

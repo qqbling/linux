@@ -54,19 +54,31 @@ static int vdec_poweron(struct vdec_session *sess)
 	if (ret)
 		return ret;
 
+	ret = clk_prepare_enable(sess->core->dos_clk);
+	if (ret)
+		goto disable_dos_parser;
+
 	ret = vdec_ops->start(sess);
 	if (ret)
-		return ret;
+		goto disable_dos;
 
 	esparser_power_up(sess);
 
 	return 0;
+
+disable_dos:
+	clk_disable_unprepare(sess->core->dos_clk);
+disable_dos_parser:
+	clk_disable_unprepare(sess->core->dos_parser_clk);
+
+	return ret;
 }
 
 static void vdec_poweroff(struct vdec_session *sess) {
 	struct vdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 
 	vdec_ops->stop(sess);
+	clk_disable_unprepare(sess->core->dos_clk);
 	clk_disable_unprepare(sess->core->dos_parser_clk);
 }
 
@@ -868,6 +880,12 @@ static int vdec_probe(struct platform_device *pdev)
 	if (IS_ERR(core->dos_parser_clk)) {
 		dev_err(dev, "dos_parser clock request failed\n");
 		return PTR_ERR(core->dos_parser_clk);
+	}
+
+	core->dos_clk = devm_clk_get(dev, "dos");
+	if (IS_ERR(core->dos_clk)) {
+		dev_err(dev, "dos clock request failed\n");
+		return PTR_ERR(core->dos_clk);
 	}
 
 	core->vdec_1_clk = devm_clk_get(dev, "vdec_1");

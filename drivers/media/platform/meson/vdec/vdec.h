@@ -40,6 +40,7 @@ struct vdec_core {
 	const struct vdec_platform *platform;
 
 	struct clk *dos_parser_clk;
+	struct clk *dos_clk;
 	struct clk *vdec_1_clk;
 	struct clk *vdec_hevc_clk;
 

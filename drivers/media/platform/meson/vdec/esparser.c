@@ -191,6 +191,8 @@ static int esparser_queue(struct vdec_session *sess, struct vb2_v4l2_buffer *vbu
 	int ret;
 	struct vb2_buffer *vb = &vbuf->vb2_buf;
 	struct vdec_core *core = sess->core;
+	struct vdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
+	u32 num_dst_bufs = v4l2_m2m_num_dst_bufs_ready(sess->m2m_ctx);
 	u32 payload_size = vb2_get_plane_payload(vb, 0);
 	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(vb, 0);
 
@@ -199,8 +201,11 @@ static int esparser_queue(struct vdec_session *sess, struct vb2_v4l2_buffer *vbu
 		return 0;
 	}
 
+	if (codec_ops->num_pending_bufs)
+		num_dst_bufs += codec_ops->num_pending_bufs(sess);
+
 	if (esparser_vififo_get_free_space(sess) < payload_size ||
-	    atomic_read(&sess->esparser_queued_bufs) >= 17)
+	    atomic_read(&sess->esparser_queued_bufs) >= num_dst_bufs)
 		return -EAGAIN;
 
 	v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);

@@ -172,15 +172,15 @@ int esparser_queue_eos(struct vdec_session *sess)
 	dma_addr_t eos_paddr;
 	int ret;
 
-	eos_vaddr = dma_alloc_coherent(dev, sizeof(eos_tail_data) + 512, &eos_paddr, GFP_KERNEL);
+	eos_vaddr = dma_alloc_coherent(dev, EOS_TAIL_BUF_SIZE + 512, &eos_paddr, GFP_KERNEL);
 	if (!eos_vaddr)
 		return -ENOMEM;
 
 	sess->should_stop = 1;
 
 	memcpy(eos_vaddr, eos_tail_data, sizeof(eos_tail_data));
-	ret = esparser_write_data(core, eos_paddr, sizeof(eos_tail_data));
-	dma_free_coherent(dev, sizeof(eos_tail_data) + 512,
+	ret = esparser_write_data(core, eos_paddr, EOS_TAIL_BUF_SIZE);
+	dma_free_coherent(dev, EOS_TAIL_BUF_SIZE + 512,
 			  eos_vaddr, eos_paddr);
 
 	return ret;

@@ -376,10 +376,16 @@ struct codec_hevc {
 
 static u32 codec_hevc_num_pending_bufs(struct vdec_session *sess)
 {
-	struct codec_hevc *hevc = sess->priv;
+	struct codec_hevc *hevc;
 	u32 ret;
 
 	mutex_lock(&sess->codec_lock);
+	hevc = sess->priv;
+	if (!hevc) {
+		mutex_unlock(&sess->codec_lock);
+		return 0;
+	}
+
 	ret = hevc->frames_num;
 	mutex_unlock(&sess->codec_lock);
 
